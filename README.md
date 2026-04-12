@@ -19,7 +19,7 @@ Copy `.env.example` to `.env` in the project root (or set variables in your envi
 | Variable | Required | Description |
 |----------|----------|-------------|
 | `GITHUB_TOKEN` | Yes | PAT for API access |
-| `REPOS` | Yes | Comma- or space-separated list: `owner/repo` |
+| `REPOS` | Yes | Comma- or space-separated `owner/repo`, or `*` / `ALL` to use every **non-archived** repo the token can access ([list repos for the authenticated user](https://docs.github.com/en/rest/repos/repos#list-repositories-for-the-authenticated-user)) |
 | `PORT` | No | API (and production UI) port, default `4000` |
 | `POLL_INTERVAL_MS` | No | Server refresh interval, default `60000` (minimum `10000`) |
 | `LOG_LEVEL` | No | e.g. `info`, `debug` |
@@ -29,6 +29,8 @@ Example:
 ```bash
 export GITHUB_TOKEN=ghp_...
 export REPOS="acme/engine,acme/api,acme/web"
+# or scan all accessible repos:
+export REPOS="*"
 ```
 
 ## Development

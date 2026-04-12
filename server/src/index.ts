@@ -25,7 +25,7 @@ if (!GITHUB_TOKEN) {
   process.exit(1);
 }
 if (!REPOS.trim()) {
-  log.error("REPOS is required (comma-separated owner/repo values)");
+  log.error('REPOS is required: use owner/repo list, or "*" / ALL for every repo this token can access');
   process.exit(1);
 }
 
@@ -94,6 +94,17 @@ if (fs.existsSync(staticDir)) {
   });
 }
 
-app.listen(PORT, () => {
+const server = app.listen(PORT, () => {
   log.info({ port: PORT, pollMs: POLL_MS }, "review-queues server listening");
+});
+server.on("error", (err: NodeJS.ErrnoException) => {
+  if (err.code === "EADDRINUSE") {
+    log.error(
+      { port: PORT, err: err.message },
+      "port already in use — stop the other server (e.g. old `npm run dev`) or set PORT in .env"
+    );
+  } else {
+    log.error({ err, port: PORT }, "server listen failed");
+  }
+  process.exit(1);
 });

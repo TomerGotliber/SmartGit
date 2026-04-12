@@ -18,6 +18,42 @@ function parseRepos(raw: string): { owner: string; repo: string; fullName: strin
     });
 }
 
+function isDiscoverAllRepos(raw: string): boolean {
+  const t = raw.trim();
+  return t === "*" || /^ALL$/i.test(t);
+}
+
+/** Repos the token can use with pull access (via /user/repos). Skips archived. */
+export async function resolveReposFromEnv(
+  octokit: InstanceType<typeof Octokit>,
+  reposEnv: string
+): Promise<{ owner: string; repo: string; fullName: string }[]> {
+  if (isDiscoverAllRepos(reposEnv)) {
+    log.info("REPOS is '*' or ALL: listing repositories accessible to this token");
+    const listed = await octokit.paginate(octokit.rest.repos.listForAuthenticatedUser, {
+      affiliation: "owner,collaborator,organization_member",
+      per_page: 100,
+      sort: "updated",
+    });
+    const repos: { owner: string; repo: string; fullName: string }[] = [];
+    for (const r of listed) {
+      if (r.archived) continue;
+      const fullName = r.full_name;
+      if (!fullName) continue;
+      const slash = fullName.indexOf("/");
+      if (slash <= 0 || slash >= fullName.length - 1) continue;
+      repos.push({
+        owner: fullName.slice(0, slash),
+        repo: fullName.slice(slash + 1),
+        fullName,
+      });
+    }
+    log.info({ count: repos.length }, "discovered repositories for review queue");
+    return repos;
+  }
+  return parseRepos(reposEnv);
+}
+
 async function listTeamMemberLogins(
   octokit: InstanceType<typeof Octokit>,
   org: string,
@@ -40,7 +76,7 @@ export async function fetchReviewQueues(
   octokit: InstanceType<typeof Octokit>,
   reposEnv: string
 ): Promise<ReviewQueuesSnapshot> {
-  const repos = parseRepos(reposEnv);
+  const repos = await resolveReposFromEnv(octokit, reposEnv);
   const byUser = new Map<string, PendingReviewItem[]>();
   const userMeta = new Map<string, { avatarUrl: string }>();
   const errors: { repo: string; message: string }[] = [];
