@@ -1,8 +1,11 @@
 import { Octokit } from "@octokit/rest";
 import pino from "pino";
+import { loadPrMetaForRead } from "../prMetaStore.js";
+import { enrichPendingItem } from "../waitTier.js";
 import {
   PendingReviewKind,
   type PendingReviewItem,
+  type PendingReviewItemBase,
   type ReviewQueuesSnapshot,
   type UserQueue,
 } from "../types.js";
@@ -59,7 +62,7 @@ export async function resolveReposFromEnv(
   return parseRepos(reposEnv);
 }
 
-async function listTeamMemberLogins(
+export async function listTeamMemberLogins(
   octokit: InstanceType<typeof Octokit>,
   org: string,
   teamSlug: string
@@ -85,7 +88,7 @@ type ReviewRow = {
 };
 
 /** Latest review state per GitHub login (by submitted_at, then id). */
-function latestReviewStateByLogin(reviews: ReviewRow[]): Map<string, string> {
+export function latestReviewStateByLogin(reviews: ReviewRow[]): Map<string, string> {
   const sorted = [...reviews].sort((a, b) => {
     const ta = new Date(a.submitted_at ?? 0).getTime();
     const tb = new Date(b.submitted_at ?? 0).getTime();
@@ -105,6 +108,7 @@ export async function fetchReviewQueues(
   octokit: InstanceType<typeof Octokit>,
   reposEnv: string
 ): Promise<ReviewQueuesSnapshot> {
+  const prMetaMap = await loadPrMetaForRead();
   const repos = await resolveReposFromEnv(octokit, reposEnv);
   const byUser = new Map<string, PendingReviewItem[]>();
   const creatorsByUser = new Map<string, PendingReviewItem[]>();
@@ -114,22 +118,24 @@ export async function fetchReviewQueues(
   const seenKeys = new Set<string>();
   const seenCreatorKeys = new Set<string>();
 
-  const addItem = (login: string, item: PendingReviewItem, avatarUrl: string) => {
+  const addItem = (login: string, item: PendingReviewItemBase, avatarUrl: string) => {
+    const enriched = enrichPendingItem(item, prMetaMap, login);
     const list = byUser.get(login) ?? [];
     const key = `${item.repoFullName}#${item.pullNumber}:${login}`;
     if (seenKeys.has(key)) return;
     seenKeys.add(key);
-    list.push(item);
+    list.push(enriched);
     byUser.set(login, list);
     if (!userMeta.has(login)) userMeta.set(login, { avatarUrl });
   };
 
-  const addCreatorItem = (login: string, item: PendingReviewItem, avatarUrl: string) => {
+  const addCreatorItem = (login: string, item: PendingReviewItemBase, avatarUrl: string) => {
+    const enriched = enrichPendingItem(item, prMetaMap, undefined);
     const list = creatorsByUser.get(login) ?? [];
     const key = `${item.repoFullName}#${item.pullNumber}:author`;
     if (seenCreatorKeys.has(key)) return;
     seenCreatorKeys.add(key);
-    list.push(item);
+    list.push(enriched);
     creatorsByUser.set(login, list);
     if (!creatorMeta.has(login)) creatorMeta.set(login, { avatarUrl });
   };
@@ -163,7 +169,7 @@ export async function fetchReviewQueues(
 
         const authorLogin = pr.user?.login;
         if (changesRequestedBy.length > 0 && authorLogin) {
-          const creatorItem: PendingReviewItem = {
+          const creatorItem: PendingReviewItemBase = {
             repoFullName: fullName,
             pullNumber: pr.number,
             title: pr.title,
@@ -189,7 +195,7 @@ export async function fetchReviewQueues(
           pull_number: pr.number,
         });
 
-        const baseItem: Omit<PendingReviewItem, "teamSlug"> = {
+        const baseItem: Omit<PendingReviewItemBase, "teamSlug"> = {
           repoFullName: fullName,
           pullNumber: pr.number,
           title: pr.title,
@@ -209,7 +215,7 @@ export async function fetchReviewQueues(
 
         for (const team of reviewers.data.teams) {
           if (!team.slug) continue;
-          const item: PendingReviewItem = { ...baseItem, teamSlug: team.slug };
+          const item: PendingReviewItemBase = { ...baseItem, teamSlug: team.slug };
           try {
             const members = await listTeamMemberLogins(octokit, owner, team.slug);
             if (members.length === 0) {
