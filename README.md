@@ -20,7 +20,7 @@ Copy `.env.example` to `.env` in the project root (or set variables in your envi
 |----------|----------|-------------|
 | `GITHUB_TOKEN` | Yes | PAT for API access |
 | `REPOS` | Yes | Comma- or space-separated `owner/repo`, or `*` / `ALL` to use every **non-archived** repo the token can access ([list repos for the authenticated user](https://docs.github.com/en/rest/repos/repos#list-repositories-for-the-authenticated-user)) |
-| `PORT` | No | API (and production UI) port, default `4000` |
+| `PORT` | No | API (and production UI) port, default `4001`. The Vite dev proxy reads this from the root `.env`. |
 | `POLL_INTERVAL_MS` | No | Server refresh interval, default `60000` (minimum `10000`) |
 | `LOG_LEVEL` | No | e.g. `info`, `debug` |
 
@@ -35,7 +35,7 @@ export REPOS="*"
 
 ## Development
 
-Run API and Vite dev server together (API on port 4000, UI on 5173 with `/api` proxied):
+Run API and Vite dev server together (API on port 4001 by default, UI on 5173 with `/api` proxied):
 
 ```bash
 npm install
@@ -55,7 +55,7 @@ npm run build --prefix server
 node server/dist/index.js
 ```
 
-Open `http://localhost:4000` (or your `PORT`).
+Open `http://localhost:4001` (or your `PORT`).
 
 ## How it works
 
