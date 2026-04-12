@@ -1,6 +1,11 @@
 import { Octokit } from "@octokit/rest";
 import pino from "pino";
-import type { PendingReviewItem, ReviewQueuesSnapshot, UserQueue } from "../types.js";
+import {
+  PendingReviewKind,
+  type PendingReviewItem,
+  type ReviewQueuesSnapshot,
+  type UserQueue,
+} from "../types.js";
 
 const log = pino({ name: "fetchQueues" });
 
@@ -72,15 +77,42 @@ async function listTeamMemberLogins(
   return logins;
 }
 
+type ReviewRow = {
+  id?: number;
+  state?: string | null;
+  submitted_at?: string | null;
+  user?: { login?: string | null } | null;
+};
+
+/** Latest review state per GitHub login (by submitted_at, then id). */
+function latestReviewStateByLogin(reviews: ReviewRow[]): Map<string, string> {
+  const sorted = [...reviews].sort((a, b) => {
+    const ta = new Date(a.submitted_at ?? 0).getTime();
+    const tb = new Date(b.submitted_at ?? 0).getTime();
+    if (ta !== tb) return ta - tb;
+    return (a.id ?? 0) - (b.id ?? 0);
+  });
+  const byLogin = new Map<string, string>();
+  for (const r of sorted) {
+    const login = r.user?.login;
+    if (!login || !r.state) continue;
+    byLogin.set(login, r.state);
+  }
+  return byLogin;
+}
+
 export async function fetchReviewQueues(
   octokit: InstanceType<typeof Octokit>,
   reposEnv: string
 ): Promise<ReviewQueuesSnapshot> {
   const repos = await resolveReposFromEnv(octokit, reposEnv);
   const byUser = new Map<string, PendingReviewItem[]>();
+  const creatorsByUser = new Map<string, PendingReviewItem[]>();
   const userMeta = new Map<string, { avatarUrl: string }>();
+  const creatorMeta = new Map<string, { avatarUrl: string }>();
   const errors: { repo: string; message: string }[] = [];
   const seenKeys = new Set<string>();
+  const seenCreatorKeys = new Set<string>();
 
   const addItem = (login: string, item: PendingReviewItem, avatarUrl: string) => {
     const list = byUser.get(login) ?? [];
@@ -90,6 +122,16 @@ export async function fetchReviewQueues(
     list.push(item);
     byUser.set(login, list);
     if (!userMeta.has(login)) userMeta.set(login, { avatarUrl });
+  };
+
+  const addCreatorItem = (login: string, item: PendingReviewItem, avatarUrl: string) => {
+    const list = creatorsByUser.get(login) ?? [];
+    const key = `${item.repoFullName}#${item.pullNumber}:author`;
+    if (seenCreatorKeys.has(key)) return;
+    seenCreatorKeys.add(key);
+    list.push(item);
+    creatorsByUser.set(login, list);
+    if (!creatorMeta.has(login)) creatorMeta.set(login, { avatarUrl });
   };
 
   for (const { owner, repo, fullName } of repos) {
@@ -103,6 +145,43 @@ export async function fetchReviewQueues(
 
       for (const pr of pulls) {
         if (pr.draft) continue;
+
+        const mergeableState =
+          (pr as { mergeable_state?: string | null }).mergeable_state ?? null;
+
+        const reviews = await octokit.paginate(octokit.rest.pulls.listReviews, {
+          owner,
+          repo,
+          pull_number: pr.number,
+          per_page: 100,
+        });
+        const latestByLogin = latestReviewStateByLogin(reviews);
+        const changesRequestedBy = [...latestByLogin.entries()]
+          .filter(([, state]) => state === "CHANGES_REQUESTED")
+          .map(([login]) => login)
+          .sort((a, b) => a.localeCompare(b));
+
+        const authorLogin = pr.user?.login;
+        if (changesRequestedBy.length > 0 && authorLogin) {
+          const creatorItem: PendingReviewItem = {
+            repoFullName: fullName,
+            pullNumber: pr.number,
+            title: pr.title,
+            htmlUrl: pr.html_url,
+            authorLogin,
+            createdAt: pr.created_at,
+            updatedAt: pr.updated_at,
+            draft: pr.draft ?? false,
+            kind: PendingReviewKind.ChangesRequested,
+            mergeableState,
+            changesRequestedBy,
+          };
+          addCreatorItem(
+            authorLogin,
+            creatorItem,
+            pr.user?.avatar_url ?? `https://github.com/${authorLogin}.png?size=64`
+          );
+        }
 
         const reviewers = await octokit.rest.pulls.listRequestedReviewers({
           owner,
@@ -119,6 +198,8 @@ export async function fetchReviewQueues(
           createdAt: pr.created_at,
           updatedAt: pr.updated_at,
           draft: pr.draft ?? false,
+          kind: PendingReviewKind.AwaitingReview,
+          mergeableState,
         };
 
         for (const u of reviewers.data.users) {
@@ -161,9 +242,18 @@ export async function fetchReviewQueues(
     }))
     .sort((a, b) => a.login.localeCompare(b.login));
 
+  const creators: UserQueue[] = [...creatorsByUser.entries()]
+    .map(([login, items]) => ({
+      login,
+      avatarUrl: creatorMeta.get(login)?.avatarUrl ?? `https://github.com/${login}.png?size=64`,
+      items: items.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()),
+    }))
+    .sort((a, b) => a.login.localeCompare(b.login));
+
   return {
     fetchedAt: new Date().toISOString(),
     users,
+    creators,
     errors,
   };
 }

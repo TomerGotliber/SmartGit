@@ -1,19 +1,35 @@
 import type { UserQueue } from "./types";
 import { ReviewCard } from "./ReviewCard";
 
-export function UserColumn({ user }: { user: UserQueue }) {
+export function UserColumn({
+  user,
+  variant,
+}: {
+  user: UserQueue;
+  variant: "reviewer" | "creator";
+}) {
+  const subtitle = variant === "creator" ? "Address feedback" : "Awaiting review";
+
   return (
-    <section className="user-column">
+    <section className={`user-column user-column--${variant}`}>
       <header className="user-column-header">
         <img src={user.avatarUrl} alt="" width={40} height={40} loading="lazy" />
-        <h2>@{user.login}</h2>
+        <div className="user-column-titles">
+          <h2>@{user.login}</h2>
+          <p className="user-column-sub">{subtitle}</p>
+        </div>
         <span className="user-count">{user.items.length}</span>
       </header>
       <div className="user-column-list">
         {user.items.length === 0 ? (
-          <p className="empty-user">Nothing waiting</p>
+          <p className="empty-user">Nothing here</p>
         ) : (
-          user.items.map((item) => <ReviewCard key={`${item.repoFullName}-${item.pullNumber}`} item={item} />)
+          user.items.map((item) => (
+            <ReviewCard
+              key={`${item.repoFullName}-${item.pullNumber}-${item.kind}-${item.teamSlug ?? ""}`}
+              item={item}
+            />
+          ))
         )}
       </div>
     </section>

@@ -1,5 +1,5 @@
 import { useId, useState } from "react";
-import type { PendingReviewItem } from "./types";
+import { PendingReviewKind, type PendingReviewItem } from "./types";
 
 function formatRelative(iso: string): string {
   const d = new Date(iso);
@@ -25,18 +25,64 @@ function formatAbsolute(iso: string): string {
   }
 }
 
+function formatMergeable(state: string): string {
+  const labels: Record<string, string> = {
+    clean: "Mergeable",
+    blocked: "Blocked",
+    behind: "Behind base branch",
+    dirty: "Merge conflict",
+    unknown: "Merge status pending",
+    unstable: "Checks pending",
+  };
+  return labels[state] ?? state.replace(/_/g, " ");
+}
+
 export function ReviewCard({ item }: { item: PendingReviewItem }) {
   const [open, setOpen] = useState(false);
   const panelId = useId();
+  const isCreator = item.kind === PendingReviewKind.ChangesRequested;
+  const mergeState = item.mergeableState?.trim() || null;
 
   return (
-    <article className="review-card">
+    <article
+      className={`review-card ${isCreator ? "review-card--creator-action" : "review-card--awaiting-review"}`}
+    >
+      <div className="review-card-status-row" aria-label="Pull request status">
+        {isCreator ? (
+          <span className="status-pill status-pill--danger">Changes requested</span>
+        ) : (
+          <span className="status-pill status-pill--review">Needs your review</span>
+        )}
+        {mergeState ? (
+          <span
+            className={`status-pill status-pill--merge status-pill--merge-${mergeState.replace(/\W/g, "")}`}
+            title="GitHub merge status for the PR head vs base"
+          >
+            {formatMergeable(mergeState)}
+          </span>
+        ) : null}
+      </div>
+
       <div className="review-card-repo">{item.repoFullName}</div>
       <h3 className="review-card-title">
         <a href={item.htmlUrl} target="_blank" rel="noreferrer">
           #{item.pullNumber} · {item.title}
         </a>
       </h3>
+
+      {isCreator && item.changesRequestedBy && item.changesRequestedBy.length > 0 ? (
+        <div className="review-card-changes-from">
+          <span className="review-card-changes-label">From</span>
+          <div className="review-card-mentions">
+            {item.changesRequestedBy.map((login) => (
+              <span key={login} className="mention-pill">
+                @{login}
+              </span>
+            ))}
+          </div>
+        </div>
+      ) : null}
+
       <div className="review-card-meta">
         <span>by @{item.authorLogin}</span>
         <span>updated {formatRelative(item.updatedAt)}</span>
@@ -61,6 +107,12 @@ export function ReviewCard({ item }: { item: PendingReviewItem }) {
             <span className="review-card-panel-label">Updated</span>
             <span>{formatAbsolute(item.updatedAt)}</span>
           </p>
+          {mergeState ? (
+            <p className="review-card-panel-row">
+              <span className="review-card-panel-label">Merge</span>
+              <span>{formatMergeable(mergeState)}</span>
+            </p>
+          ) : null}
           <p className="review-card-panel-row review-card-panel-link">
             <a href={item.htmlUrl} target="_blank" rel="noreferrer">
               Open pull request on GitHub →

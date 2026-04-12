@@ -71,6 +71,18 @@ html.wall-screen .user-column-header h2 {
   font-size: 1.2rem;
 }
 
+html.wall-screen .user-column-sub {
+  font-size: 0.8rem;
+}
+
+html.wall-screen .board-section-title {
+  font-size: 1.25rem;
+}
+
+html.wall-screen .board-section-hint {
+  font-size: 0.95rem;
+}
+
 html.wall-screen .btn {
   min-height: 44px;
   padding: 0.55rem 1.15rem;
@@ -240,6 +252,57 @@ html.wall-screen .app-title {
   border: 1px solid var(--border);
 }
 
+.meta-pill--creators {
+  border-color: rgba(240, 113, 120, 0.35);
+  color: #e8a8ac;
+}
+
+.chip-board {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+}
+
+.chip-board-label {
+  margin: 0;
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--text-muted);
+}
+
+.chip--creator.chip--active {
+  border-color: rgba(240, 113, 120, 0.45);
+  background: rgba(240, 113, 120, 0.12);
+  color: #ffc8cb;
+}
+
+.board-section {
+  margin-bottom: 2rem;
+}
+
+.board-section--after {
+  margin-top: 2.5rem;
+  padding-top: 2rem;
+  border-top: 1px solid var(--border);
+}
+
+.board-section-title {
+  margin: 0 0 0.35rem;
+  font-size: 1.05rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+.board-section-hint {
+  margin: 0 0 1rem;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+  max-width: 48rem;
+  line-height: 1.45;
+}
+
 .btn {
   border: 1px solid var(--border);
   background: var(--bg-elevated);
@@ -304,10 +367,34 @@ html.wall-screen .app-title {
   border: 2px solid var(--border);
 }
 
+.user-column-titles {
+  min-width: 0;
+  flex: 1;
+}
+
 .user-column-header h2 {
   margin: 0;
   font-size: 1rem;
   font-weight: 600;
+}
+
+.user-column-sub {
+  margin: 0.15rem 0 0;
+  font-size: 0.72rem;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+}
+
+.user-column--creator .user-column-header {
+  background: rgba(240, 113, 120, 0.06);
+  border-bottom-color: rgba(240, 113, 120, 0.25);
+}
+
+.user-column--creator .user-count {
+  color: var(--danger);
+  background: rgba(240, 113, 120, 0.12);
 }
 
 .user-count {
@@ -333,11 +420,110 @@ html.wall-screen .app-title {
   border: 1px solid var(--border);
   border-radius: 10px;
   padding: 0.75rem 0.85rem;
-  transition: border-color 0.15s;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.review-card--awaiting-review {
+  border-left: 4px solid rgba(232, 165, 75, 0.85);
+  box-shadow: inset 0 0 0 1px rgba(232, 165, 75, 0.06);
+}
+
+.review-card--creator-action {
+  border-left: 4px solid rgba(240, 113, 120, 0.9);
+  box-shadow: inset 0 0 0 1px rgba(240, 113, 120, 0.08);
 }
 
 .review-card:hover {
   border-color: rgba(126, 182, 255, 0.35);
+}
+
+.review-card-status-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+  margin-bottom: 0.55rem;
+}
+
+.status-pill {
+  display: inline-flex;
+  align-items: center;
+  font-size: 0.65rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  padding: 0.28rem 0.5rem;
+  border-radius: 6px;
+  line-height: 1.2;
+}
+
+.status-pill--review {
+  color: var(--accent);
+  background: var(--accent-dim);
+  border: 1px solid rgba(232, 165, 75, 0.35);
+}
+
+.status-pill--danger {
+  color: #ffc8cb;
+  background: rgba(240, 113, 120, 0.18);
+  border: 1px solid rgba(240, 113, 120, 0.45);
+}
+
+.status-pill--merge {
+  color: var(--text-muted);
+  background: rgba(0, 0, 0, 0.25);
+  border: 1px solid var(--border);
+  font-weight: 600;
+}
+
+.status-pill--mergeblocked,
+.status-pill--mergedirty {
+  color: #ffc8cb;
+  border-color: rgba(240, 113, 120, 0.35);
+  background: rgba(240, 113, 120, 0.1);
+}
+
+.status-pill--mergebehind {
+  color: var(--accent);
+  border-color: rgba(232, 165, 75, 0.35);
+  background: var(--accent-dim);
+}
+
+.review-card-changes-from {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem 0.65rem;
+  margin: 0.35rem 0 0.5rem;
+  padding: 0.45rem 0.55rem;
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: 8px;
+  border: 1px solid rgba(240, 113, 120, 0.2);
+}
+
+.review-card-changes-label {
+  font-size: 0.68rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+}
+
+.review-card-mentions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+
+.mention-pill {
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  font-weight: 500;
+  color: var(--link);
+  background: rgba(126, 182, 255, 0.1);
+  padding: 0.2rem 0.45rem;
+  border-radius: 6px;
+  border: 1px solid rgba(126, 182, 255, 0.25);
 }
 
 .review-card-repo {

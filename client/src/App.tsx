@@ -25,6 +25,7 @@ export function App() {
   const [wallMode, setWallMode] = useState(false);
   const [filterText, setFilterText] = useState("");
   const [focusLogins, setFocusLogins] = useState<Set<string>>(() => new Set());
+  const [focusCreatorLogins, setFocusCreatorLogins] = useState<Set<string>>(() => new Set());
   const [fullscreen, setFullscreen] = useState(false);
 
   const load = useCallback(async () => {
@@ -94,15 +95,28 @@ export function App() {
   }, [toggleFullscreen]);
 
   const users = data?.users ?? [];
+  const creators = data?.creators ?? [];
   const usersWithWork = useMemo(() => users.filter((u) => u.items.length > 0), [users]);
+  const creatorsWithWork = useMemo(() => creators.filter((u) => u.items.length > 0), [creators]);
 
   const visibleUsers = useMemo(
     () => filterQueues(users, focusLogins, filterText),
     [users, focusLogins, filterText]
   );
 
-  const totalPending = usersWithWork.reduce((n, u) => n + u.items.length, 0);
-  const visiblePending = visibleUsers.reduce((n, u) => n + u.items.length, 0);
+  const visibleCreators = useMemo(
+    () => filterQueues(creators, focusCreatorLogins, filterText),
+    [creators, focusCreatorLogins, filterText]
+  );
+
+  const totalReviewerPending = usersWithWork.reduce((n, u) => n + u.items.length, 0);
+  const visibleReviewerPending = visibleUsers.reduce((n, u) => n + u.items.length, 0);
+  const totalCreatorPending = creatorsWithWork.reduce((n, u) => n + u.items.length, 0);
+  const visibleCreatorPending = visibleCreators.reduce((n, u) => n + u.items.length, 0);
+
+  const hasAnyWork = totalReviewerPending > 0 || totalCreatorPending > 0;
+  const filterHidesEverything =
+    hasAnyWork && visibleReviewerPending === 0 && visibleCreatorPending === 0;
 
   const toggleFocusLogin = useCallback((login: string) => {
     setFocusLogins((prev) => {
@@ -113,7 +127,23 @@ export function App() {
     });
   }, []);
 
+  const toggleFocusCreatorLogin = useCallback((login: string) => {
+    setFocusCreatorLogins((prev) => {
+      const next = new Set(prev);
+      if (next.has(login)) next.delete(login);
+      else next.add(login);
+      return next;
+    });
+  }, []);
+
   const clearFocus = useCallback(() => setFocusLogins(new Set()), []);
+  const clearCreatorFocus = useCallback(() => setFocusCreatorLogins(new Set()), []);
+
+  const clearAllFilters = useCallback(() => {
+    setFilterText("");
+    setFocusLogins(new Set());
+    setFocusCreatorLogins(new Set());
+  }, []);
 
   if (loading && !data) {
     return (
@@ -148,8 +178,8 @@ export function App() {
           <h1 className="app-title">Review Queues</h1>
           <p className={`app-sub ${wallMode ? "app-sub--compact" : ""}`}>
             {wallMode
-              ? "Tap a reviewer to focus columns. Use search to narrow PRs. Press F for fullscreen."
-              : "Open pull requests where someone is still listed as a requested reviewer on GitHub. Use Wall screen for TVs and shared monitors."}
+              ? "Focus columns with chips, search PRs, press F for fullscreen."
+              : "Reviewers: PRs where GitHub still lists you as a requested reviewer. Authors: PRs where your latest reviewer state is “changes requested”. Merge status shows when GitHub returns it."}
           </p>
         </div>
         <div className="header-actions">
@@ -158,8 +188,11 @@ export function App() {
               Synced {formatFetchedAt(data.fetchedAt)}
             </span>
           ) : null}
-          <span className="meta-pill" title="After filters">
-            {visiblePending} / {totalPending} pending
+          <span className="meta-pill" title="After filters · reviewers">
+            {visibleReviewerPending} / {totalReviewerPending} reviewer
+          </span>
+          <span className="meta-pill meta-pill--creators" title="After filters · authors">
+            {visibleCreatorPending} / {totalCreatorPending} author
           </span>
           <button
             type="button"
@@ -186,33 +219,63 @@ export function App() {
           id="queue-filter"
           className="filter-input"
           type="search"
-          placeholder="Repo, title, author, reviewer, PR #…"
+          placeholder="Repo, title, author, reviewer login, PR #…"
           value={filterText}
           onChange={(e) => setFilterText(e.target.value)}
           autoComplete="off"
         />
-        <div className="reviewer-chips" role="group" aria-label="Focus reviewers">
-          <button
-            type="button"
-            className={`chip ${focusLogins.size === 0 ? "chip--active" : ""}`}
-            onClick={clearFocus}
-          >
-            All reviewers
-          </button>
-          {usersWithWork.map((u) => (
+        <div className="chip-board">
+          <p className="chip-board-label">Reviewers</p>
+          <div className="reviewer-chips" role="group" aria-label="Focus reviewers">
             <button
-              key={u.login}
               type="button"
-              className={`chip ${focusLogins.has(u.login) ? "chip--active" : ""}`}
-              onClick={() => toggleFocusLogin(u.login)}
-              title={`Show only @${u.login}`}
+              className={`chip ${focusLogins.size === 0 ? "chip--active" : ""}`}
+              onClick={clearFocus}
             >
-              <img src={u.avatarUrl} alt="" className="chip-avatar" width={22} height={22} />
-              @{u.login}
-              <span className="chip-count">{u.items.length}</span>
+              All
             </button>
-          ))}
+            {usersWithWork.map((u) => (
+              <button
+                key={u.login}
+                type="button"
+                className={`chip ${focusLogins.has(u.login) ? "chip--active" : ""}`}
+                onClick={() => toggleFocusLogin(u.login)}
+                title={`Show only @${u.login}`}
+              >
+                <img src={u.avatarUrl} alt="" className="chip-avatar" width={22} height={22} />
+                @{u.login}
+                <span className="chip-count">{u.items.length}</span>
+              </button>
+            ))}
+          </div>
         </div>
+        {creatorsWithWork.length > 0 ? (
+          <div className="chip-board">
+            <p className="chip-board-label">Authors</p>
+            <div className="reviewer-chips" role="group" aria-label="Focus authors with changes requested">
+              <button
+                type="button"
+                className={`chip ${focusCreatorLogins.size === 0 ? "chip--active" : ""}`}
+                onClick={clearCreatorFocus}
+              >
+                All
+              </button>
+              {creatorsWithWork.map((u) => (
+                <button
+                  key={u.login}
+                  type="button"
+                  className={`chip chip--creator ${focusCreatorLogins.has(u.login) ? "chip--active" : ""}`}
+                  onClick={() => toggleFocusCreatorLogin(u.login)}
+                  title={`Show only @${u.login}`}
+                >
+                  <img src={u.avatarUrl} alt="" className="chip-avatar" width={22} height={22} />
+                  @{u.login}
+                  <span className="chip-count">{u.items.length}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        ) : null}
       </div>
 
       {error ? (
@@ -235,30 +298,57 @@ export function App() {
         </div>
       ) : null}
 
-      {usersWithWork.length === 0 ? (
+      {!hasAnyWork ? (
         <div className="state-center">
-          <p>No pending requested reviews across configured repos.</p>
+          <p>No pending reviewer requests and no open “changes requested” reviews in configured repos.</p>
         </div>
-      ) : visibleUsers.length === 0 ? (
+      ) : filterHidesEverything ? (
         <div className="state-center">
-          <p>No PRs match your search or reviewer focus.</p>
+          <p>No PRs match your search or column focus.</p>
           <p style={{ marginTop: "1rem" }}>
-            <button type="button" className="btn" onClick={() => { setFilterText(""); clearFocus(); }}>
+            <button type="button" className="btn" onClick={clearAllFilters}>
               Clear filters
             </button>
           </p>
         </div>
       ) : (
-        <div className="board">
-          {visibleUsers.map((u) => (
-            <UserColumn key={u.login} user={u} />
-          ))}
-        </div>
+        <>
+          {visibleCreators.length > 0 ? (
+            <section className="board-section" aria-labelledby="board-authors-heading">
+              <h2 id="board-authors-heading" className="board-section-title">
+                Authors · address feedback
+              </h2>
+              <p className="board-section-hint">Pull requests where a reviewer’s latest review is “changes requested”.</p>
+              <div className="board">
+                {visibleCreators.map((u) => (
+                  <UserColumn key={`c-${u.login}`} user={u} variant="creator" />
+                ))}
+              </div>
+            </section>
+          ) : null}
+
+          {visibleUsers.length > 0 ? (
+            <section
+              className={`board-section ${visibleCreators.length > 0 ? "board-section--after" : ""}`}
+              aria-labelledby="board-reviewers-heading"
+            >
+              <h2 id="board-reviewers-heading" className="board-section-title">
+                Reviewers · pending
+              </h2>
+              <p className="board-section-hint">You still appear under “Reviewers” on the PR.</p>
+              <div className="board">
+                {visibleUsers.map((u) => (
+                  <UserColumn key={`r-${u.login}`} user={u} variant="reviewer" />
+                ))}
+              </div>
+            </section>
+          ) : null}
+        </>
       )}
 
       {users.some((u) => u.items.length === 0) && usersWithWork.length > 0 ? (
         <details className="empty-teammates">
-          <summary>Teammates with empty queues</summary>
+          <summary>Teammates with empty reviewer queues</summary>
           <p>
             {users
               .filter((u) => u.items.length === 0)

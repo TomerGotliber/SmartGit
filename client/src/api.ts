@@ -1,4 +1,4 @@
-import type { ReviewQueuesSnapshot } from "./types";
+import type { ReviewQueuesSnapshot, UserQueue } from "./types";
 
 export async function fetchQueues(): Promise<ReviewQueuesSnapshot> {
   const res = await fetch("/api/queues");
@@ -6,7 +6,8 @@ export async function fetchQueues(): Promise<ReviewQueuesSnapshot> {
     const text = await res.text();
     throw new Error(text || res.statusText);
   }
-  return res.json() as Promise<ReviewQueuesSnapshot>;
+  const raw = (await res.json()) as ReviewQueuesSnapshot & { creators?: UserQueue[] };
+  return { ...raw, creators: raw.creators ?? [] };
 }
 
 export async function postRefresh(): Promise<ReviewQueuesSnapshot> {
@@ -15,5 +16,6 @@ export async function postRefresh(): Promise<ReviewQueuesSnapshot> {
     const text = await res.text();
     throw new Error(text || res.statusText);
   }
-  return res.json() as Promise<ReviewQueuesSnapshot>;
+  const raw = (await res.json()) as ReviewQueuesSnapshot & { creators?: UserQueue[] };
+  return { ...raw, creators: raw.creators ?? [] };
 }

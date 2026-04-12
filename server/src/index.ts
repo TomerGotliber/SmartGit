@@ -41,7 +41,10 @@ async function refreshCache(): Promise<void> {
     try {
       log.info("refreshing review queues from GitHub");
       cache = await fetchReviewQueues(octokit, REPOS);
-      log.info({ users: cache.users.length, errors: cache.errors.length }, "refresh complete");
+      log.info(
+        { reviewers: cache.users.length, creators: cache.creators.length, errors: cache.errors.length },
+        "refresh complete"
+      );
     } catch (e) {
       log.error({ err: e }, "refresh failed");
     } finally {

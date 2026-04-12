@@ -60,11 +60,12 @@ Open `http://localhost:4001` (or your `PORT`).
 ## How it works
 
 1. The server periodically loads **open, non-draft** PRs for each configured repo.
-2. For each PR it reads GitHub’s **requested reviewers** (users and teams).
-3. **Users** are keyed by login. **Teams** are expanded via the Org Teams API (repo `owner` must be the **organization**).
-4. The UI refreshes from the server cache on an interval and supports **Refresh now**.
+2. **Reviewers board:** GitHub’s **requested reviewers** (users and teams). **Teams** are expanded via the Org Teams API when the repo `owner` is the **organization**.
+3. **Authors board:** PRs where at least one reviewer’s **latest submitted review** is **CHANGES_REQUESTED** (per reviewer login, by `submitted_at`). Those rows appear under the **PR author’s** column with who requested changes.
+4. **Merge status** is shown when GitHub returns `mergeable_state` on the pull (often `null` in list responses until computed).
+5. The UI refreshes from the server cache on an interval and supports **Refresh now**.
 
-This matches GitHub’s notion of “waiting on review” for explicitly requested reviewers. It does not try to infer reviews from CODEOWNERS alone unless those owners are also requested on the PR.
+Reviewer queues match GitHub’s “still listed as a reviewer.” Author queues match “someone’s latest review is request changes,” which can overlap the reviewer list if you’re still requested after requesting changes. CODEOWNERS alone does not create rows unless GitHub also shows requested reviewers / submitted reviews as above.
 
 ## Extending
 
