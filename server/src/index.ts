@@ -17,6 +17,7 @@ const log = pino({ level: process.env.LOG_LEVEL ?? "info" });
 
 const GITHUB_TOKEN = process.env.GITHUB_TOKEN;
 const REPOS = process.env.REPOS ?? "";
+
 const PORT = Number(process.env.PORT ?? 4001);
 const POLL_MS = Math.max(10_000, Number(process.env.POLL_INTERVAL_MS ?? 60_000));
 
