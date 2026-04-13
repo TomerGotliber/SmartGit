@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" role="img" aria-label="SmartGit">
+  <rect width="32" height="32" rx="7" fill="#1a222d"/>
+  <path
+    fill="none"
+    stroke="#e8a54b"
+    stroke-width="2.2"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+    d="M16 24V14m0 0-6-6m6 6 6-6"
+  />
+  <circle cx="16" cy="24" r="3" fill="#e8a54b"/>
+  <circle cx="10" cy="8" r="3" fill="#e8a54b"/>
+  <circle cx="22" cy="8" r="3" fill="#e8a54b"/>
+</svg>

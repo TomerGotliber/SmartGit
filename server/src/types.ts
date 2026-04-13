@@ -32,8 +32,10 @@ export interface PendingReviewItem {
   updatedAt: string;
   draft: boolean;
   kind: PendingReviewKind;
-  /** GitHub mergeable_state when the API returned it (clean, blocked, behind, dirty, unknown, …). */
+  /** GitHub mergeable_state when the API returned it (clean, blocked, behind, dirty, unknown, ?). */
   mergeableState?: string | null;
+  /** Base branch ref this PR merges into (`pr.base.ref`). */
+  baseRef?: string | null;
   /** When kind is changes_requested: reviewers whose latest submitted review is CHANGES_REQUESTED. */
   changesRequestedBy?: string[];
   /** When set, this item is pending for every member of the team */
@@ -41,27 +43,16 @@ export interface PendingReviewItem {
   /** Whole hours since PR last update (visual wait color). */
   hoursWaiting: number;
   waitTier: WaitTier;
-  /** Set by PR author via dashboard (stored in pr-meta.json). */
+  /** Legacy field; always null (severity UI removed). */
   severity: Exclude<ReviewSeverityValue, "none"> | null;
-  /** Reviewer this row is for (awaiting_review); used for poke + display. */
+  /** Reviewer this row is for (awaiting_review); used for display. */
   rowReviewerLogin?: string;
-  /** Whether a poke comment can be posted for rowReviewerLogin (cooldown). */
-  canPokeReviewer?: boolean;
-  /** ISO time when poke is allowed again. */
-  nextPokeAt?: string;
-  /** Creator rows: poke cooldown per reviewer who requested changes. */
-  pokeStatusByReviewer?: Record<string, { canPoke: boolean; nextPokeAt?: string }>;
 }
 
-/** Built from GitHub before local meta (wait tier, severity, poke) is applied. */
+/** Built from GitHub before local meta (wait tier, severity) is applied. */
 export type PendingReviewItemBase = Omit<
   PendingReviewItem,
-  | "hoursWaiting"
-  | "waitTier"
-  | "severity"
-  | "canPokeReviewer"
-  | "nextPokeAt"
-  | "pokeStatusByReviewer"
+  "hoursWaiting" | "waitTier" | "severity"
 >;
 
 export interface UserQueue {
@@ -79,6 +70,8 @@ export interface AllOpenPrItem {
   createdAt: string;
   updatedAt: string;
   mergeableState?: string | null;
+  /** Base branch ref this PR merges into. */
+  baseRef?: string | null;
   hasReviewRequests: boolean;
   requestedUserLogins: string[];
   requestedTeamSlugs: string[];
@@ -86,22 +79,20 @@ export interface AllOpenPrItem {
   hoursWaiting: number;
   waitTier: WaitTier;
   severity: Exclude<ReviewSeverityValue, "none"> | null;
-  pokeStatusByReviewer?: Record<string, { canPoke: boolean; nextPokeAt?: string }>;
 }
 
 /** Built from GitHub before local meta is applied. */
-export type AllOpenPrItemBase = Omit<
-  AllOpenPrItem,
-  "hoursWaiting" | "waitTier" | "severity" | "pokeStatusByReviewer"
->;
+export type AllOpenPrItemBase = Omit<AllOpenPrItem, "hoursWaiting" | "waitTier" | "severity">;
 
 export interface SmartGitSnapshot {
   fetchedAt: string;
+  /** GitHub login for the configured token (for "my dashboard" without typing). */
+  actorLogin: string | null;
   /** Every open, non-draft PR in configured repos (overview). */
   allOpen: AllOpenPrItem[];
   /** Requested reviewers still waiting to review. */
   users: UserQueue[];
-  /** PR authors with at least one blocking “changes requested” review (latest review per reviewer). */
+  /** PR authors with at least one blocking "changes requested" review (latest review per reviewer). */
   creators: UserQueue[];
   errors: { repo: string; message: string }[];
 }

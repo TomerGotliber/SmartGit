@@ -2,7 +2,6 @@ import type {
   AllOpenPrItem,
   PendingReviewItem,
   SmartGitSnapshot,
-  ReviewSeverityValue,
   UserQueue,
   WaitTier,
 } from "./types";
@@ -37,49 +36,44 @@ function normalizeSnapshot(
 ): SmartGitSnapshot {
   return {
     ...raw,
+    actorLogin: raw.actorLogin ?? null,
     allOpen: (raw.allOpen ?? []).map(normalizeAllOpenItem),
     users: raw.users.map(normalizeQueue),
     creators: (raw.creators ?? []).map(normalizeQueue),
   };
 }
 
+function sleep(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+/** First server sync can take minutes when REPOS=* covers many repos; retry 503 until cache is ready. */
 export async function fetchQueues(): Promise<SmartGitSnapshot> {
-  const res = await fetch("/api/queues");
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(text || res.statusText);
+  const maxAttempts = 90;
+  const delayMs = 2000;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    const res = await fetch("/api/queues");
+    if (res.status === 503) {
+      await sleep(delayMs);
+      continue;
+    }
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(text || res.statusText);
+    }
+    const raw = (await res.json()) as SmartGitSnapshot & { creators?: UserQueue[]; allOpen?: AllOpenPrItem[] };
+    return normalizeSnapshot(raw);
   }
-  const raw = (await res.json()) as SmartGitSnapshot & { creators?: UserQueue[]; allOpen?: AllOpenPrItem[] };
-  return normalizeSnapshot(raw);
+  throw new Error("Server queue cache is still not ready after waiting. Try Refresh or check server logs.");
 }
 
 export async function postRefresh(): Promise<SmartGitSnapshot> {
   const res = await fetch("/api/refresh", { method: "POST" });
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(text || res.statusText);
-  }
-  const raw = (await res.json()) as SmartGitSnapshot & { creators?: UserQueue[]; allOpen?: AllOpenPrItem[] };
-  return normalizeSnapshot(raw);
-}
-
-export async function patchPrSeverity(
-  owner: string,
-  repo: string,
-  pullNumber: number,
-  severity: ReviewSeverityValue,
-  actorLogin?: string
-): Promise<SmartGitSnapshot> {
-  const res = await fetch(`/api/pr/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/${pullNumber}/severity`, {
-    method: "PATCH",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ severity, actorLogin: actorLogin?.trim() || undefined }),
-  });
   const text = await res.text();
   if (!res.ok) {
     throw new Error(text || res.statusText);
   }
-  const raw = JSON.parse(text) as SmartGitSnapshot & { creators?: UserQueue[]; allOpen?: AllOpenPrItem[] };
+  const raw = (await res.json()) as SmartGitSnapshot & { creators?: UserQueue[]; allOpen?: AllOpenPrItem[] };
   return normalizeSnapshot(raw);
 }
 
@@ -87,25 +81,20 @@ export async function postPrPoke(
   owner: string,
   repo: string,
   pullNumber: number,
-  reviewerLogin: string,
-  note?: string
+  targetLogin: string,
+  options?: { note?: string; customMessage?: string }
 ): Promise<SmartGitSnapshot> {
+  const trimmedNote = options?.note?.trim();
+  const trimmedCustom = options?.customMessage?.trim().slice(0, 3200);
   const res = await fetch(`/api/pr/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/${pullNumber}/poke`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ reviewerLogin, note: note?.trim() || undefined }),
+    body: JSON.stringify({
+      targetLogin,
+      ...(trimmedCustom ? { customMessage: trimmedCustom } : trimmedNote ? { note: trimmedNote } : {}),
+    }),
   });
   const text = await res.text();
-  if (res.status === 429) {
-    let nextPokeAt: string | undefined;
-    try {
-      const j = JSON.parse(text) as { nextPokeAt?: string };
-      nextPokeAt = j.nextPokeAt;
-    } catch {
-      /* ignore */
-    }
-    throw new PokeCooldownError(nextPokeAt ?? null, text);
-  }
   if (!res.ok) {
     throw new Error(text || res.statusText);
   }
@@ -120,14 +109,4 @@ export async function postPrPoke(
     return normalizeSnapshot(snap);
   }
   return postRefresh();
-}
-
-export class PokeCooldownError extends Error {
-  constructor(
-    public readonly nextPokeAt: string | null,
-    message: string
-  ) {
-    super(message);
-    this.name = "PokeCooldownError";
-  }
 }

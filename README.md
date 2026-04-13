@@ -19,13 +19,11 @@ Copy `.env.example` to `.env` in the project root (or set variables in your envi
 | Variable | Required | Description |
 |----------|----------|-------------|
 | `GITHUB_TOKEN` | Yes | PAT for API access |
-| `REPOS` | Yes | Comma- or space-separated `owner/repo`, or `*` / `ALL` to use every **non-archived** repo the token can access ([list repos for the authenticated user](https://docs.github.com/en/rest/repos/repos#list-repositories-for-the-authenticated-user)) |
+| `REPOS` | Yes | Comma- or space-separated `owner/repo`, or `*` / `ALL` to use every **non-archived** repo the token can access ([list repos for the authenticated user](https://docs.github.com/en/rest/repos/repos#list-repositories-for-the-authenticated-user)). Repos named **`SmartGit`** are always skipped so the dashboard does not track this app’s own repository. |
 | `PORT` | No | API (and production UI) port, default `4001`. The Vite dev proxy reads this from the root `.env`. |
 | `POLL_INTERVAL_MS` | No | Server refresh interval, default `60000` (minimum `10000`) |
 | `LOG_LEVEL` | No | e.g. `info`, `debug` |
-| `PR_META_PATH` | No | File path for per-PR **severity** and **poke** cooldown timestamps (default `server/data/pr-meta.json`, gitignored) |
-| `POKE_COOLDOWN_HOURS` | No | Minimum hours between pokes of the same reviewer on the same PR (default `24`) |
-| `REQUIRE_PR_AUTHOR_FOR_SEVERITY` | No | If `true`, setting severity requires `actorLogin` in the request to match the PR author on GitHub |
+| `PR_META_PATH` | No | File path for optional per-PR local metadata (default `server/data/pr-meta.json`, gitignored) |
 
 Example:
 
@@ -75,7 +73,7 @@ Reviewer queues match GitHub’s “still listed as a reviewer.” Author queues
 
 - **Wait color** uses hours since the PR’s **`updated_at`**: green (&lt;24h), yellow (&lt;3d), orange (&lt;1w), red (older). It is a proxy for staleness, not “time since review was requested.”
 - **Severity** is chosen by the author on **Authors · address feedback** cards and stored locally in `pr-meta.json` (not on GitHub). Everyone sees a **Priority** pill on cards for that PR.
-- **Poke** (author only) posts a short **@mention comment** on the PR. The comment appears as the **`GITHUB_TOKEN` account**, not as the author. Cooldown is per reviewer per PR (`POKE_COOLDOWN_HOURS`).
+- **Poke** posts a short **@mention comment** on the PR (reviewer or author, depending on the row). The comment appears as the **`GITHUB_TOKEN` account**. There is no cooldown—you can poke again whenever you want.
 
 ## Extending
 

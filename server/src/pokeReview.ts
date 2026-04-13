@@ -1,6 +1,20 @@
 import type { Octokit } from "@octokit/rest";
 import { latestReviewStateByLogin, listTeamMemberLogins } from "./github/fetchQueues.js";
 
+/** True if `targetLogin` is the PR author (case-insensitive). */
+export async function verifyAuthorMayBePoked(
+  octokit: InstanceType<typeof Octokit>,
+  owner: string,
+  repo: string,
+  pullNumber: number,
+  targetLogin: string
+): Promise<boolean> {
+  const { data: pr } = await octokit.pulls.get({ owner, repo, pull_number: pullNumber });
+  const author = pr.user?.login;
+  if (!author) return false;
+  return author.toLowerCase() === targetLogin.toLowerCase();
+}
+
 export async function verifyReviewerMayBePoked(
   octokit: InstanceType<typeof Octokit>,
   owner: string,

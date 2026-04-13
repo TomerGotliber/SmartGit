@@ -10,7 +10,7 @@ export function UserColumn({
   variant: "reviewer" | "creator";
   onSnapshot: (snap: SmartGitSnapshot) => void;
 }) {
-  const subtitle = variant === "creator" ? "Address feedback" : "Awaiting review";
+  const subtitle = variant === "creator" ? "Changes requested" : "Waiting for review";
 
   return (
     <section className={`user-column user-column--${variant}`}>

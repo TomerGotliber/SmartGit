@@ -11,6 +11,7 @@ export default defineConfig(({ mode }) => {
   const apiPort = env.PORT?.trim() || "4001";
 
   return {
+    envDir: repoRoot,
     plugins: [react()],
     server: {
       host: true,

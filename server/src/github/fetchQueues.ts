@@ -1,6 +1,5 @@
 import { Octokit } from "@octokit/rest";
 import pino from "pino";
-import { loadPrMetaForRead } from "../prMetaStore.js";
 import { enrichAllOpenPr, enrichPendingItem } from "../waitTier.js";
 import {
   PendingReviewKind,
@@ -12,6 +11,21 @@ import {
 } from "../types.js";
 
 const log = pino({ name: "smartgit-fetch" });
+
+/** Resolved once per process; token user for client “my dashboard”. */
+let cachedTokenLogin: string | null | undefined;
+
+async function resolveTokenActorLogin(octokit: InstanceType<typeof Octokit>): Promise<string | null> {
+  if (cachedTokenLogin !== undefined) return cachedTokenLogin;
+  try {
+    const { data } = await octokit.rest.users.getAuthenticated();
+    cachedTokenLogin = data.login ?? null;
+  } catch (e) {
+    log.warn({ err: e }, "could not resolve GitHub token login (getAuthenticated)");
+    cachedTokenLogin = null;
+  }
+  return cachedTokenLogin;
+}
 
 function parseRepos(raw: string): { owner: string; repo: string; fullName: string }[] {
   return raw
@@ -27,16 +41,92 @@ function parseRepos(raw: string): { owner: string; repo: string; fullName: strin
     });
 }
 
+/** Strip BOM, outer quotes (common in .env), trim. */
+function normalizeReposExcludeRaw(raw: string): string {
+  let s = raw.replace(/^\uFEFF/, "").trim();
+  if (
+    (s.startsWith('"') && s.endsWith('"')) ||
+    (s.startsWith("'") && s.endsWith("'"))
+  ) {
+    s = s.slice(1, -1).trim();
+  }
+  return s;
+}
+
+function stripTokenQuotes(token: string): string {
+  const t = token.trim();
+  if (
+    (t.startsWith('"') && t.endsWith('"')) ||
+    (t.startsWith("'") && t.endsWith("'"))
+  ) {
+    return t.slice(1, -1).trim();
+  }
+  return t;
+}
+
+/** Entries: `owner/repo` (full match) or a single segment (match repo name for any owner). Case-insensitive. */
+function parseReposExclude(raw: string): {
+  isExcluded: (fullName: string, repo: string) => boolean;
+} {
+  const fullNames = new Set<string>();
+  const repoSlugs = new Set<string>();
+  const normalized = normalizeReposExcludeRaw(raw);
+  for (const part of normalized
+    .split(/[\s,;]+/)
+    .map((s) => stripTokenQuotes(s).toLowerCase())
+    .filter(Boolean)) {
+    if (part.includes("/")) {
+      const [o, ...rest] = part.split("/");
+      const r = rest.join("/");
+      if (o && r) fullNames.add(`${o}/${r}`);
+    } else {
+      repoSlugs.add(part);
+    }
+  }
+  return {
+    isExcluded: (fullName: string, repo: string) => {
+      if (fullNames.has(fullName.toLowerCase())) return true;
+      if (repoSlugs.has(repo.toLowerCase())) return true;
+      return false;
+    },
+  };
+}
+
+/** Repo slug excluded everywhere so this dashboard does not list the SmartGit app repo under any owner (e.g. user/SmartGit). */
+const BUILTIN_EXCLUDED_REPO_SLUGS = new Set(["smartgit"]);
+
+function withBuiltinRepoExcludes(parsed: ReturnType<typeof parseReposExclude>): {
+  isExcluded: (fullName: string, repo: string) => boolean;
+} {
+  return {
+    isExcluded: (fullName: string, repo: string) => {
+      if (BUILTIN_EXCLUDED_REPO_SLUGS.has(repo.toLowerCase())) return true;
+      return parsed.isExcluded(fullName, repo);
+    },
+  };
+}
+
 function isDiscoverAllRepos(raw: string): boolean {
   const t = raw.trim();
   return t === "*" || /^ALL$/i.test(t);
 }
 
+export type SnapshotEnvOptions = {
+  /** When set (including ""), used instead of `process.env.REPOS_EXCLUDE` for this snapshot. */
+  reposExcludeRaw?: string;
+};
+
 /** Repos the token can use with pull access (via /user/repos). Skips archived. */
 export async function resolveReposFromEnv(
   octokit: InstanceType<typeof Octokit>,
-  reposEnv: string
+  reposEnv: string,
+  reposExcludeRawOverride?: string
 ): Promise<{ owner: string; repo: string; fullName: string }[]> {
+  const excludeRaw = normalizeReposExcludeRaw(
+    reposExcludeRawOverride !== undefined ? reposExcludeRawOverride : (process.env.REPOS_EXCLUDE ?? "")
+  );
+  const { isExcluded } = withBuiltinRepoExcludes(parseReposExclude(excludeRaw));
+
   if (isDiscoverAllRepos(reposEnv)) {
     log.info("REPOS is '*' or ALL: listing repositories accessible to this token");
     const listed = await octokit.paginate(octokit.rest.repos.listForAuthenticatedUser, {
@@ -45,22 +135,36 @@ export async function resolveReposFromEnv(
       sort: "updated",
     });
     const repos: { owner: string; repo: string; fullName: string }[] = [];
+    let skippedExclude = 0;
     for (const r of listed) {
       if (r.archived) continue;
       const fullName = r.full_name;
       if (!fullName) continue;
       const slash = fullName.indexOf("/");
       if (slash <= 0 || slash >= fullName.length - 1) continue;
-      repos.push({
-        owner: fullName.slice(0, slash),
-        repo: fullName.slice(slash + 1),
-        fullName,
-      });
+      const owner = fullName.slice(0, slash);
+      const repo = fullName.slice(slash + 1);
+      if (isExcluded(fullName, repo)) {
+        skippedExclude += 1;
+        continue;
+      }
+      repos.push({ owner, repo, fullName });
     }
-    log.info({ count: repos.length }, "discovered repositories for SmartGit");
+    if (excludeRaw.trim()) {
+      log.info({ count: repos.length, skippedExclude }, "discovered repositories for SmartGit (after REPOS_EXCLUDE)");
+    } else {
+      log.info({ count: repos.length }, "discovered repositories for SmartGit");
+    }
     return repos;
   }
-  return parseRepos(reposEnv);
+  const explicit = parseRepos(reposEnv);
+  return explicit.filter((e) => {
+    if (isExcluded(e.fullName, e.repo)) {
+      log.info({ fullName: e.fullName }, "skipping repo (REPOS_EXCLUDE)");
+      return false;
+    }
+    return true;
+  });
 }
 
 export async function listTeamMemberLogins(
@@ -88,29 +192,43 @@ type ReviewRow = {
   user?: { login?: string | null } | null;
 };
 
-/** Latest review state per GitHub login (by submitted_at, then id). */
+/** Review states that supersede one another for merge / author-queue purposes (GitHub REST). */
+const SUBSTANTIVE_REVIEW_STATES = new Set(["APPROVED", "CHANGES_REQUESTED", "DISMISSED"]);
+
+/**
+ * Newest substantive review per GitHub login (approve / request changes / dismiss).
+ * Ignores `COMMENTED` and `PENDING` so a follow-up “comment only” review does not erase an
+ * earlier “request changes” — matching how GitHub still blocks merge until addressed.
+ */
 export function latestReviewStateByLogin(reviews: ReviewRow[]): Map<string, string> {
   const sorted = [...reviews].sort((a, b) => {
     const ta = new Date(a.submitted_at ?? 0).getTime();
     const tb = new Date(b.submitted_at ?? 0).getTime();
-    if (ta !== tb) return ta - tb;
-    return (a.id ?? 0) - (b.id ?? 0);
+    if (tb !== ta) return tb - ta;
+    return (b.id ?? 0) - (a.id ?? 0);
   });
   const byLogin = new Map<string, string>();
   for (const r of sorted) {
     const login = r.user?.login;
-    if (!login || !r.state) continue;
-    byLogin.set(login, r.state);
+    const state = r.state;
+    if (!login || !state) continue;
+    if (!SUBSTANTIVE_REVIEW_STATES.has(state)) continue;
+    if (byLogin.has(login)) continue;
+    byLogin.set(login, state);
   }
   return byLogin;
 }
 
 export async function fetchSmartGitSnapshot(
   octokit: InstanceType<typeof Octokit>,
-  reposEnv: string
+  reposEnv: string,
+  envOptions?: SnapshotEnvOptions
 ): Promise<SmartGitSnapshot> {
-  const prMetaMap = await loadPrMetaForRead();
-  const repos = await resolveReposFromEnv(octokit, reposEnv);
+  const reposExcludeRaw =
+    envOptions?.reposExcludeRaw !== undefined
+      ? envOptions.reposExcludeRaw
+      : (process.env.REPOS_EXCLUDE ?? "");
+  const repos = await resolveReposFromEnv(octokit, reposEnv, reposExcludeRaw);
   const byUser = new Map<string, PendingReviewItem[]>();
   const creatorsByUser = new Map<string, PendingReviewItem[]>();
   const userMeta = new Map<string, { avatarUrl: string }>();
@@ -121,7 +239,7 @@ export async function fetchSmartGitSnapshot(
   const allOpenMap = new Map<string, AllOpenPrItemBase>();
 
   const addItem = (login: string, item: PendingReviewItemBase, avatarUrl: string) => {
-    const enriched = enrichPendingItem(item, prMetaMap, login);
+    const enriched = enrichPendingItem(item, login);
     const list = byUser.get(login) ?? [];
     const key = `${item.repoFullName}#${item.pullNumber}:${login}`;
     if (seenKeys.has(key)) return;
@@ -132,7 +250,7 @@ export async function fetchSmartGitSnapshot(
   };
 
   const addCreatorItem = (login: string, item: PendingReviewItemBase, avatarUrl: string) => {
-    const enriched = enrichPendingItem(item, prMetaMap, undefined);
+    const enriched = enrichPendingItem(item, undefined);
     const list = creatorsByUser.get(login) ?? [];
     const key = `${item.repoFullName}#${item.pullNumber}:author`;
     if (seenCreatorKeys.has(key)) return;
@@ -156,6 +274,7 @@ export async function fetchSmartGitSnapshot(
 
         const mergeableState =
           (pr as { mergeable_state?: string | null }).mergeable_state ?? null;
+        const baseRef = pr.base?.ref?.trim() || null;
 
         const reviews = await octokit.paginate(octokit.rest.pulls.listReviews, {
           owner,
@@ -182,6 +301,7 @@ export async function fetchSmartGitSnapshot(
             draft: pr.draft ?? false,
             kind: PendingReviewKind.ChangesRequested,
             mergeableState,
+            baseRef,
             changesRequestedBy,
           };
           addCreatorItem(
@@ -208,6 +328,7 @@ export async function fetchSmartGitSnapshot(
           draft: pr.draft ?? false,
           kind: PendingReviewKind.AwaitingReview,
           mergeableState,
+          baseRef,
         };
 
         for (const u of reviewers.data.users) {
@@ -246,6 +367,7 @@ export async function fetchSmartGitSnapshot(
           createdAt: pr.created_at,
           updatedAt: pr.updated_at,
           mergeableState,
+          baseRef,
           hasReviewRequests: userReq.length > 0 || teamSlugs.length > 0,
           requestedUserLogins: userReq,
           requestedTeamSlugs: teamSlugs,
@@ -276,11 +398,21 @@ export async function fetchSmartGitSnapshot(
     .sort((a, b) => a.login.localeCompare(b.login));
 
   const allOpen = [...allOpenMap.values()]
-    .map((row) => enrichAllOpenPr(row, prMetaMap))
+    .map((row) => enrichAllOpenPr(row))
     .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
+
+  const actorLogin = await resolveTokenActorLogin(octokit);
+  log.info(
+    {
+      repoCount: repos.length,
+      reposExcludeActive: Boolean(normalizeReposExcludeRaw(reposExcludeRaw).trim()),
+    },
+    "snapshot repo list (this refresh)"
+  );
 
   return {
     fetchedAt: new Date().toISOString(),
+    actorLogin,
     allOpen,
     users,
     creators,

@@ -1,13 +1,9 @@
-import { canPokeAgain, type PrMetaEntry } from "./prMetaStore.js";
 import {
-  PendingReviewKind,
-  ReviewSeverity,
   WaitTier as WaitTierConst,
   type AllOpenPrItem,
   type AllOpenPrItemBase,
   type PendingReviewItem,
   type PendingReviewItemBase,
-  type ReviewSeverityValue,
   type WaitTier,
 } from "./types.js";
 
@@ -23,85 +19,29 @@ export function computeWaitMetrics(updatedAt: string): { hoursWaiting: number; w
   return { hoursWaiting, waitTier };
 }
 
-function normalizeSeverity(
-  s: ReviewSeverityValue | undefined
-): Exclude<ReviewSeverityValue, "none"> | null {
-  if (!s || s === ReviewSeverity.None) return null;
-  return s as Exclude<ReviewSeverityValue, "none">;
-}
-
 /** Merge wait + stored meta into a row. */
 export function enrichPendingItem(
   item: PendingReviewItemBase,
-  prMetaMap: Record<string, PrMetaEntry>,
   rowReviewerLogin?: string
 ): PendingReviewItem {
-  const key = `${item.repoFullName}#${item.pullNumber}`;
-  const entry = prMetaMap[key] ?? {};
   const { hoursWaiting, waitTier } = computeWaitMetrics(item.updatedAt);
-  const severity = normalizeSeverity(entry.severity);
-
-  let canPokeReviewer: boolean | undefined;
-  let nextPokeAt: string | undefined;
-  if (rowReviewerLogin) {
-    const last = entry.pokes?.[rowReviewerLogin];
-    const poke = canPokeAgain(last, Date.now());
-    canPokeReviewer = poke.ok;
-    if (!poke.ok && poke.nextAt) nextPokeAt = poke.nextAt;
-  }
-
-  let pokeStatusByReviewer: PendingReviewItem["pokeStatusByReviewer"];
-  if (item.kind === PendingReviewKind.ChangesRequested && item.changesRequestedBy?.length) {
-    pokeStatusByReviewer = {};
-    for (const rev of item.changesRequestedBy) {
-      const last = entry.pokes?.[rev];
-      const poke = canPokeAgain(last, Date.now());
-      pokeStatusByReviewer[rev] = {
-        canPoke: poke.ok,
-        ...(poke.nextAt ? { nextPokeAt: poke.nextAt } : {}),
-      };
-    }
-  }
 
   return {
     ...item,
     hoursWaiting,
     waitTier,
-    severity,
+    severity: null,
     rowReviewerLogin,
-    canPokeReviewer,
-    nextPokeAt,
-    pokeStatusByReviewer,
   };
 }
 
-export function enrichAllOpenPr(
-  item: AllOpenPrItemBase,
-  prMetaMap: Record<string, PrMetaEntry>
-): AllOpenPrItem {
-  const key = `${item.repoFullName}#${item.pullNumber}`;
-  const entry = prMetaMap[key] ?? {};
+export function enrichAllOpenPr(item: AllOpenPrItemBase): AllOpenPrItem {
   const { hoursWaiting, waitTier } = computeWaitMetrics(item.updatedAt);
-  const severity = normalizeSeverity(entry.severity);
-
-  let pokeStatusByReviewer: AllOpenPrItem["pokeStatusByReviewer"];
-  if (item.changesRequestedBy.length > 0) {
-    pokeStatusByReviewer = {};
-    for (const rev of item.changesRequestedBy) {
-      const last = entry.pokes?.[rev];
-      const poke = canPokeAgain(last, Date.now());
-      pokeStatusByReviewer[rev] = {
-        canPoke: poke.ok,
-        ...(poke.nextAt ? { nextPokeAt: poke.nextAt } : {}),
-      };
-    }
-  }
 
   return {
     ...item,
     hoursWaiting,
     waitTier,
-    severity,
-    pokeStatusByReviewer,
+    severity: null,
   };
 }

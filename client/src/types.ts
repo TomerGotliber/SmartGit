@@ -31,15 +31,14 @@ export interface PendingReviewItem {
   draft: boolean;
   kind: PendingReviewKind;
   mergeableState?: string | null;
+  /** Base branch this PR targets (merge into). */
+  baseRef?: string | null;
   changesRequestedBy?: string[];
   teamSlug?: string;
   hoursWaiting: number;
   waitTier: WaitTier;
   severity: "low" | "medium" | "high" | null;
   rowReviewerLogin?: string;
-  canPokeReviewer?: boolean;
-  nextPokeAt?: string;
-  pokeStatusByReviewer?: Record<string, { canPoke: boolean; nextPokeAt?: string }>;
 }
 
 export interface UserQueue {
@@ -57,6 +56,7 @@ export interface AllOpenPrItem {
   createdAt: string;
   updatedAt: string;
   mergeableState?: string | null;
+  baseRef?: string | null;
   hasReviewRequests: boolean;
   requestedUserLogins: string[];
   requestedTeamSlugs: string[];
@@ -64,11 +64,12 @@ export interface AllOpenPrItem {
   hoursWaiting: number;
   waitTier: WaitTier;
   severity: "low" | "medium" | "high" | null;
-  pokeStatusByReviewer?: Record<string, { canPoke: boolean; nextPokeAt?: string }>;
 }
 
 export interface SmartGitSnapshot {
   fetchedAt: string;
+  /** Login for the server token; used for “my dashboard” (avatar) without typing. */
+  actorLogin: string | null;
   allOpen: AllOpenPrItem[];
   users: UserQueue[];
   creators: UserQueue[];

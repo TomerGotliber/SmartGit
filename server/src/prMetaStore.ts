@@ -10,8 +10,6 @@ const __rootDir = path.dirname(fileURLToPath(import.meta.url));
 
 export interface PrMetaEntry {
   severity?: ReviewSeverityValue;
-  /** reviewer login -> ISO time of last poke comment */
-  pokes?: Record<string, string>;
 }
 
 export function prKey(repoFullName: string, pullNumber: number): string {
@@ -66,19 +64,4 @@ export function enqueuePrMetaUpdate(mutator: (draft: Record<string, PrMetaEntry>
     log.error({ err }, "pr-meta update failed");
   });
   return op;
-}
-
-export function pokeCooldownMs(): number {
-  const h = Number(process.env.POKE_COOLDOWN_HOURS ?? 24);
-  if (!Number.isFinite(h) || h < 1) return 24 * 3600 * 1000;
-  return h * 3600 * 1000;
-}
-
-export function canPokeAgain(lastPokeIso: string | undefined, now: number): { ok: boolean; nextAt?: string } {
-  if (!lastPokeIso) return { ok: true };
-  const last = new Date(lastPokeIso).getTime();
-  if (Number.isNaN(last)) return { ok: true };
-  const cooldown = pokeCooldownMs();
-  if (now - last >= cooldown) return { ok: true };
-  return { ok: false, nextAt: new Date(last + cooldown).toISOString() };
 }

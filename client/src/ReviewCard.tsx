@@ -1,14 +1,8 @@
-import { useId, useState } from "react";
-import { PokeCooldownError, patchPrSeverity, postPrPoke } from "./api";
-import {
-  PendingReviewKind,
-  ReviewSeverity,
-  type PendingReviewItem,
-  type SmartGitSnapshot,
-  type ReviewSeverityValue,
-} from "./types";
-
-const ACTOR_STORAGE_KEY = "smartgit-github-login";
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { postPrPoke } from "./api";
+import { formatRepoDisplayLabel } from "./repoDisplay";
+import { repoTheme } from "./repoTheme";
+import { PendingReviewKind, type PendingReviewItem, type SmartGitSnapshot } from "./types";
 
 function formatRelative(iso: string): string {
   const d = new Date(iso);
@@ -59,10 +53,104 @@ function waitTierLabel(tier: number): string {
   return "Critical wait";
 }
 
-function severityLabel(s: NonNullable<PendingReviewItem["severity"]>): string {
-  if (s === "low") return "Low";
-  if (s === "medium") return "Medium";
-  return "High";
+type PokeTargetOption = { login: string; role: string };
+
+function buildPokeTargetOptions(item: PendingReviewItem, isCreator: boolean): PokeTargetOption[] {
+  const seen = new Set<string>();
+  const out: PokeTargetOption[] = [];
+  const add = (login: string | undefined, role: string) => {
+    if (!login) return;
+    const key = login.toLowerCase();
+    if (seen.has(key)) return;
+    seen.add(key);
+    out.push({ login, role });
+  };
+  if (isCreator) {
+    add(item.authorLogin, "Author");
+    for (const r of item.changesRequestedBy ?? []) add(r, "Reviewer");
+  } else {
+    add(item.rowReviewerLogin, "Reviewer");
+    add(item.authorLogin, "Author");
+  }
+  return out;
+}
+
+function defaultPokeTargetLogin(item: PendingReviewItem, isCreator: boolean): string {
+  if (isCreator) return item.authorLogin;
+  return item.rowReviewerLogin ?? item.authorLogin;
+}
+
+function sortPokeOptionsWithDefaultFirst(options: PokeTargetOption[], defaultLogin: string): PokeTargetOption[] {
+  return [...options].sort((a, b) => {
+    if (a.login === defaultLogin) return -1;
+    if (b.login === defaultLogin) return 1;
+    return a.login.localeCompare(b.login);
+  });
+}
+
+function PokeCustomCompose({
+  targetLogin,
+  value,
+  onChange,
+  disabled,
+  onCancel,
+  onSubmit,
+}: {
+  targetLogin: string;
+  value: string;
+  onChange: (next: string) => void;
+  disabled: boolean;
+  onCancel: () => void;
+  onSubmit: () => void | Promise<void>;
+}) {
+  const areaRef = useRef<HTMLTextAreaElement>(null);
+  useLayoutEffect(() => {
+    areaRef.current?.focus();
+  }, [targetLogin]);
+
+  return (
+    <div className="poke-custom-inline" role="group" aria-label={`Custom poke for @${targetLogin}`}>
+      <div className="poke-custom-inline-head">
+        <span className="poke-custom-inline-title">Custom poke</span>
+      </div>
+      <div className="poke-custom-compose">
+        <div className="poke-custom-compose-inner">
+          <span className="poke-custom-mention-prefix" aria-hidden="true">
+            @{targetLogin}
+          </span>
+          <textarea
+            ref={areaRef}
+            className="poke-custom-textarea"
+            rows={4}
+            maxLength={3200}
+            value={value}
+            placeholder="Your message…"
+            disabled={disabled}
+            onChange={(e) => onChange(e.target.value)}
+            aria-label={`Message after @${targetLogin}`}
+          />
+        </div>
+        <div className="poke-custom-meta">
+          <span className="poke-custom-count">
+            {value.length} / 3200
+          </span>
+        </div>
+      </div>
+      <div className="poke-custom-actions">
+        <button type="button" className="btn-poke btn-poke--secondary" disabled={disabled} onClick={onCancel}>
+          Cancel
+        </button>
+        <button
+          type="button"
+          className="btn-poke"
+          disabled={disabled || !value.trim()}
+          onClick={() => void onSubmit()}
+        >
+          Post comment
+        </button>
+      </div>
+    </div>
+  );
 }
 
 export function ReviewCard({
@@ -75,36 +163,43 @@ export function ReviewCard({
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [pokeMsg, setPokeMsg] = useState<string | null>(null);
-  const [actorLogin, setActorLogin] = useState(() => {
-    try {
-      return localStorage.getItem(ACTOR_STORAGE_KEY) ?? "";
-    } catch {
-      return "";
-    }
-  });
+  const [pokeDialogLogin, setPokeDialogLogin] = useState<string | null>(null);
+  const [customPokeText, setCustomPokeText] = useState("");
   const panelId = useId();
+  const pokeTargetFieldId = useId();
+  const rTheme = useMemo(() => repoTheme(item.repoFullName), [item.repoFullName]);
   const isCreator = item.kind === PendingReviewKind.ChangesRequested;
   const mergeState = item.mergeableState?.trim() || null;
   const [owner, repo] = splitRepo(item.repoFullName);
   const tier = item.waitTier ?? 0;
   const hours = item.hoursWaiting ?? 0;
 
-  const persistActor = (v: string) => {
-    setActorLogin(v);
-    try {
-      if (v.trim()) localStorage.setItem(ACTOR_STORAGE_KEY, v.trim());
-      else localStorage.removeItem(ACTOR_STORAGE_KEY);
-    } catch {
-      /* ignore */
-    }
-  };
+  const showPokeRow =
+    (isCreator && (item.changesRequestedBy?.length ?? 0) > 0) || (!isCreator && Boolean(item.authorLogin));
 
-  const onSeverityChange = async (v: ReviewSeverityValue) => {
+  const changesRequestedKey = (item.changesRequestedBy ?? []).join("\0");
+
+  const pokeOptions = useMemo(() => {
+    if (!showPokeRow) return [] as PokeTargetOption[];
+    const preferred = defaultPokeTargetLogin(item, isCreator);
+    const built = buildPokeTargetOptions(item, isCreator);
+    return sortPokeOptionsWithDefaultFirst(built, preferred);
+  }, [showPokeRow, isCreator, item.authorLogin, item.rowReviewerLogin, changesRequestedKey]);
+
+  const preferredPokeLogin = pokeOptions[0]?.login ?? "";
+
+  const [pokeTargetLogin, setPokeTargetLogin] = useState(preferredPokeLogin);
+
+  useEffect(() => {
+    setPokeTargetLogin(preferredPokeLogin);
+  }, [preferredPokeLogin]);
+
+  const doPoke = async (targetLogin: string) => {
     if (!owner || !repo) return;
     setBusy(true);
     setPokeMsg(null);
     try {
-      const snap = await patchPrSeverity(owner, repo, item.pullNumber, v, actorLogin.trim() || undefined);
+      const snap = await postPrPoke(owner, repo, item.pullNumber, targetLogin);
       onSnapshot(snap);
     } catch (e) {
       setPokeMsg(e instanceof Error ? e.message : String(e));
@@ -113,28 +208,44 @@ export function ReviewCard({
     }
   };
 
-  const doPoke = async (reviewerLogin: string) => {
-    if (!owner || !repo) return;
+  const closePokeDialog = () => {
+    setPokeDialogLogin(null);
+    setCustomPokeText("");
+  };
+
+  const submitCustomPoke = async () => {
+    const login = pokeDialogLogin;
+    const text = customPokeText.trim();
+    if (!login || !owner || !repo || !text) return;
     setBusy(true);
     setPokeMsg(null);
     try {
-      const snap = await postPrPoke(owner, repo, item.pullNumber, reviewerLogin);
+      const snap = await postPrPoke(owner, repo, item.pullNumber, login, {
+        customMessage: text,
+      });
       onSnapshot(snap);
+      closePokeDialog();
     } catch (e) {
-      if (e instanceof PokeCooldownError && e.nextPokeAt) {
-        setPokeMsg(`Cooldown until ${formatAbsolute(e.nextPokeAt)}`);
-      } else {
-        setPokeMsg(e instanceof Error ? e.message : String(e));
-      }
+      setPokeMsg(e instanceof Error ? e.message : String(e));
     } finally {
       setBusy(false);
     }
   };
 
+  useEffect(() => {
+    if (!pokeDialogLogin) return;
+    const onKey = (ev: KeyboardEvent) => {
+      if (ev.key === "Escape") closePokeDialog();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [pokeDialogLogin]);
+
   return (
     <article
       className={`review-card review-card--wait-${tier} ${isCreator ? "review-card--creator-action" : "review-card--awaiting-review"}`}
     >
+      <div className="review-card-top-accent" style={{ background: rTheme.stripe }} aria-hidden />
       <div className="review-card-wait-bar" aria-hidden title={`~${hours}h since last PR update`} />
 
       <div className="review-card-status-row" aria-label="Pull request status">
@@ -146,11 +257,6 @@ export function ReviewCard({
         ) : (
           <span className="status-pill status-pill--review">Needs your review</span>
         )}
-        {item.severity ? (
-          <span className={`status-pill status-pill--sev status-pill--sev-${item.severity}`}>
-            Priority: {severityLabel(item.severity)}
-          </span>
-        ) : null}
         {mergeState ? (
           <span
             className={`status-pill status-pill--merge status-pill--merge-${mergeState.replace(/\W/g, "")}`}
@@ -161,69 +267,89 @@ export function ReviewCard({
         ) : null}
       </div>
 
-      <div className="review-card-repo">{item.repoFullName}</div>
+      <div
+        className="review-card-repo review-card-repo--themed"
+        style={{
+          color: rTheme.labelColor,
+          backgroundColor: rTheme.labelBackground,
+          borderColor: rTheme.labelBorder,
+        }}
+      >
+        <span title={item.repoFullName}>{formatRepoDisplayLabel(item.repoFullName)}</span>
+      </div>
       <h3 className="review-card-title">
         <a href={item.htmlUrl} target="_blank" rel="noreferrer">
           #{item.pullNumber} · {item.title}
         </a>
       </h3>
-
-      {isCreator ? (
-        <div className="review-card-severity">
-          <label className="review-card-severity-label" htmlFor={`sev-${item.repoFullName}-${item.pullNumber}`}>
-            Severity (author)
-          </label>
-          <select
-            id={`sev-${item.repoFullName}-${item.pullNumber}`}
-            className="review-card-select"
-            disabled={busy}
-            value={item.severity ?? ReviewSeverity.None}
-            onChange={(ev) => void onSeverityChange(ev.target.value as ReviewSeverityValue)}
-          >
-            <option value={ReviewSeverity.None}>Not set</option>
-            <option value={ReviewSeverity.Low}>Low</option>
-            <option value={ReviewSeverity.Medium}>Medium</option>
-            <option value={ReviewSeverity.High}>High</option>
-          </select>
-          <input
-            className="review-card-actor"
-            type="text"
-            placeholder="Your GitHub login (if server enforces author)"
-            title="Stored in this browser; sent only if REQUIRE_PR_AUTHOR_FOR_SEVERITY is enabled on the server"
-            value={actorLogin}
-            onChange={(e) => persistActor(e.target.value)}
-          />
-        </div>
+      {item.baseRef ? (
+        <p className="review-card-base-branch" title="Branch this pull request merges into">
+          <span className="review-card-base-branch-label">Into</span>
+          <span className="review-card-base-branch-ref">{item.baseRef}</span>
+        </p>
       ) : null}
 
-      {isCreator && item.changesRequestedBy && item.changesRequestedBy.length > 0 ? (
-        <div className="review-card-changes-from">
-          <span className="review-card-changes-label">From</span>
-          <div className="review-card-mentions review-card-mentions--block">
-            {item.changesRequestedBy.map((login) => {
-              const st = item.pokeStatusByReviewer?.[login];
-              const canPoke = st?.canPoke !== false;
-              return (
-                <div key={login} className="review-card-mention-row">
-                  <span className="mention-pill">@{login}</span>
-                  <button
-                    type="button"
-                    className="btn-poke"
-                    disabled={busy || !canPoke}
-                    title={
-                      canPoke
-                        ? "Post a polite @mention comment on the PR (uses server token)"
-                        : st?.nextPokeAt
-                          ? `Next poke after ${formatAbsolute(st.nextPokeAt)}`
-                          : "Poke unavailable"
-                    }
-                    onClick={() => void doPoke(login)}
+      {pokeOptions.length > 0 ? (
+        <div className="review-card-poke">
+          <div className="review-card-poke-stack">
+            <div className="review-card-poke-toolbar">
+              <div className="poke-target-field">
+                <label className="poke-target-label" htmlFor={pokeTargetFieldId}>
+                  Recipient
+                </label>
+                <div className="poke-target-select-wrap">
+                  <select
+                    id={pokeTargetFieldId}
+                    className="poke-target-select"
+                    value={pokeTargetLogin}
+                    disabled={busy}
+                    onChange={(e) => {
+                      setPokeTargetLogin(e.target.value);
+                      closePokeDialog();
+                    }}
                   >
-                    Poke
-                  </button>
+                    {pokeOptions.map((o) => (
+                      <option key={o.login} value={o.login}>
+                        @{o.login} — {o.role}
+                      </option>
+                    ))}
+                  </select>
                 </div>
-              );
-            })}
+              </div>
+              <div className="review-card-poke-actions review-card-poke-actions--segmented" role="group" aria-label="Poke actions">
+                <button
+                  type="button"
+                  className="btn-poke btn-poke--segment btn-poke--segment-primary"
+                  disabled={busy || !pokeTargetLogin}
+                  title="Post a poke comment with the server token (target is the selected person)"
+                  onClick={() => void doPoke(pokeTargetLogin)}
+                >
+                  Poke
+                </button>
+                <button
+                  type="button"
+                  className="btn-poke btn-poke--segment btn-poke--segment-ghost"
+                  disabled={busy || !pokeTargetLogin}
+                  title="Write your own poke wording for the selected person"
+                  onClick={() => {
+                    setCustomPokeText("");
+                    setPokeDialogLogin(pokeTargetLogin);
+                  }}
+                >
+                  Custom
+                </button>
+              </div>
+            </div>
+            {pokeDialogLogin ? (
+              <PokeCustomCompose
+                targetLogin={pokeDialogLogin}
+                value={customPokeText}
+                onChange={setCustomPokeText}
+                disabled={busy}
+                onCancel={closePokeDialog}
+                onSubmit={submitCustomPoke}
+              />
+            ) : null}
           </div>
         </div>
       ) : null}
