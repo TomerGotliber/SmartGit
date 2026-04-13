@@ -70,8 +70,35 @@ export interface UserQueue {
   items: PendingReviewItem[];
 }
 
-export interface ReviewQueuesSnapshot {
+export interface AllOpenPrItem {
+  repoFullName: string;
+  pullNumber: number;
+  title: string;
+  htmlUrl: string;
+  authorLogin: string;
+  createdAt: string;
+  updatedAt: string;
+  mergeableState?: string | null;
+  hasReviewRequests: boolean;
+  requestedUserLogins: string[];
+  requestedTeamSlugs: string[];
+  changesRequestedBy: string[];
+  hoursWaiting: number;
+  waitTier: WaitTier;
+  severity: Exclude<ReviewSeverityValue, "none"> | null;
+  pokeStatusByReviewer?: Record<string, { canPoke: boolean; nextPokeAt?: string }>;
+}
+
+/** Built from GitHub before local meta is applied. */
+export type AllOpenPrItemBase = Omit<
+  AllOpenPrItem,
+  "hoursWaiting" | "waitTier" | "severity" | "pokeStatusByReviewer"
+>;
+
+export interface SmartGitSnapshot {
   fetchedAt: string;
+  /** Every open, non-draft PR in configured repos (overview). */
+  allOpen: AllOpenPrItem[];
   /** Requested reviewers still waiting to review. */
   users: UserQueue[];
   /** PR authors with at least one blocking “changes requested” review (latest review per reviewer). */

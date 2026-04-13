@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { fetchQueues, postRefresh } from "./api";
-import { filterQueues } from "./filterQueues";
-import type { ReviewQueuesSnapshot } from "./types";
+import { AllOpenPrCard } from "./AllOpenPrCard";
+import { filterAllOpen, filterQueues } from "./filterQueues";
+import type { SmartGitSnapshot } from "./types";
 import { UserColumn } from "./UserColumn";
 
 const POLL_MS = 60_000;
@@ -18,7 +19,7 @@ function formatFetchedAt(iso: string): string {
 }
 
 export function App() {
-  const [data, setData] = useState<ReviewQueuesSnapshot | null>(null);
+  const [data, setData] = useState<SmartGitSnapshot | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -96,8 +97,11 @@ export function App() {
 
   const users = data?.users ?? [];
   const creators = data?.creators ?? [];
+  const allOpen = data?.allOpen ?? [];
   const usersWithWork = useMemo(() => users.filter((u) => u.items.length > 0), [users]);
   const creatorsWithWork = useMemo(() => creators.filter((u) => u.items.length > 0), [creators]);
+
+  const visibleAllOpen = useMemo(() => filterAllOpen(allOpen, filterText), [allOpen, filterText]);
 
   const visibleUsers = useMemo(
     () => filterQueues(users, focusLogins, filterText),
@@ -109,14 +113,20 @@ export function App() {
     [creators, focusCreatorLogins, filterText]
   );
 
+  const totalOpen = allOpen.length;
+  const visibleOpenCount = visibleAllOpen.length;
   const totalReviewerPending = usersWithWork.reduce((n, u) => n + u.items.length, 0);
   const visibleReviewerPending = visibleUsers.reduce((n, u) => n + u.items.length, 0);
   const totalCreatorPending = creatorsWithWork.reduce((n, u) => n + u.items.length, 0);
   const visibleCreatorPending = visibleCreators.reduce((n, u) => n + u.items.length, 0);
 
-  const hasAnyWork = totalReviewerPending > 0 || totalCreatorPending > 0;
-  const filterHidesEverything =
-    hasAnyWork && visibleReviewerPending === 0 && visibleCreatorPending === 0;
+  const hasAnything =
+    totalOpen > 0 || totalReviewerPending > 0 || totalCreatorPending > 0;
+  const hasVisibleSomething =
+    visibleOpenCount > 0 || visibleReviewerPending > 0 || visibleCreatorPending > 0;
+  const filterActive =
+    filterText.trim().length > 0 || focusLogins.size > 0 || focusCreatorLogins.size > 0;
+  const filterHidesEverything = hasAnything && !hasVisibleSomething && filterActive;
 
   const toggleFocusLogin = useCallback((login: string) => {
     setFocusLogins((prev) => {
@@ -150,7 +160,7 @@ export function App() {
       <div className="app-shell">
         <div className="state-center">
           <div className="spinner" aria-hidden />
-          <p>Loading review queues…</p>
+          <p>Loading SmartGit…</p>
         </div>
       </div>
     );
@@ -175,11 +185,11 @@ export function App() {
     <div className="app-shell">
       <header className="app-header">
         <div>
-          <h1 className="app-title">Review Queues</h1>
+          <h1 className="app-title">SmartGit</h1>
           <p className={`app-sub ${wallMode ? "app-sub--compact" : ""}`}>
             {wallMode
               ? "Focus columns with chips, search PRs, press F for fullscreen."
-              : "Reviewers: PRs where GitHub still lists you as a requested reviewer. Authors: PRs where your latest reviewer state is “changes requested”. Merge status shows when GitHub returns it."}
+              : "All open: every non-draft PR. Authors: changes requested. Reviewers: you are still listed as a requested reviewer."}
           </p>
         </div>
         <div className="header-actions">
@@ -188,6 +198,9 @@ export function App() {
               Synced {formatFetchedAt(data.fetchedAt)}
             </span>
           ) : null}
+          <span className="meta-pill meta-pill--open" title="After filters · all open PRs">
+            {visibleOpenCount} / {totalOpen} open
+          </span>
           <span className="meta-pill" title="After filters · reviewers">
             {visibleReviewerPending} / {totalReviewerPending} reviewer
           </span>
@@ -298,9 +311,9 @@ export function App() {
         </div>
       ) : null}
 
-      {!hasAnyWork ? (
+      {!hasAnything ? (
         <div className="state-center">
-          <p>No pending reviewer requests and no open “changes requested” reviews in configured repos.</p>
+          <p>No open pull requests in configured repos.</p>
         </div>
       ) : filterHidesEverything ? (
         <div className="state-center">
@@ -313,15 +326,35 @@ export function App() {
         </div>
       ) : (
         <>
+          {visibleOpenCount > 0 ? (
+            <section className="board-section" aria-labelledby="board-all-open-heading">
+              <h2 id="board-all-open-heading" className="board-section-title">
+                All open pull requests
+              </h2>
+              <p className="board-section-hint">
+                Every open, non-draft PR (including those waiting on review, with changes requested, or neither). Search
+                filters this grid only; reviewer/author chips do not.
+              </p>
+              <div className="board board--open-prs">
+                {visibleAllOpen.map((pr) => (
+                  <AllOpenPrCard key={`${pr.repoFullName}#${pr.pullNumber}`} pr={pr} onSnapshot={setData} />
+                ))}
+              </div>
+            </section>
+          ) : null}
+
           {visibleCreators.length > 0 ? (
-            <section className="board-section" aria-labelledby="board-authors-heading">
+            <section
+              className={`board-section ${visibleOpenCount > 0 ? "board-section--after" : ""}`}
+              aria-labelledby="board-authors-heading"
+            >
               <h2 id="board-authors-heading" className="board-section-title">
                 Authors · address feedback
               </h2>
               <p className="board-section-hint">Pull requests where a reviewer’s latest review is “changes requested”.</p>
               <div className="board">
                 {visibleCreators.map((u) => (
-                  <UserColumn key={`c-${u.login}`} user={u} variant="creator" />
+                  <UserColumn key={`c-${u.login}`} user={u} variant="creator" onSnapshot={setData} />
                 ))}
               </div>
             </section>
@@ -329,7 +362,7 @@ export function App() {
 
           {visibleUsers.length > 0 ? (
             <section
-              className={`board-section ${visibleCreators.length > 0 ? "board-section--after" : ""}`}
+              className={`board-section ${visibleOpenCount > 0 || visibleCreators.length > 0 ? "board-section--after" : ""}`}
               aria-labelledby="board-reviewers-heading"
             >
               <h2 id="board-reviewers-heading" className="board-section-title">
@@ -338,7 +371,7 @@ export function App() {
               <p className="board-section-hint">You still appear under “Reviewers” on the PR.</p>
               <div className="board">
                 {visibleUsers.map((u) => (
-                  <UserColumn key={`r-${u.login}`} user={u} variant="reviewer" />
+                  <UserColumn key={`r-${u.login}`} user={u} variant="reviewer" onSnapshot={setData} />
                 ))}
               </div>
             </section>

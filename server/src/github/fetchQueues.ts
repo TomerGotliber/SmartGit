@@ -1,16 +1,17 @@
 import { Octokit } from "@octokit/rest";
 import pino from "pino";
 import { loadPrMetaForRead } from "../prMetaStore.js";
-import { enrichPendingItem } from "../waitTier.js";
+import { enrichAllOpenPr, enrichPendingItem } from "../waitTier.js";
 import {
   PendingReviewKind,
+  type AllOpenPrItemBase,
   type PendingReviewItem,
   type PendingReviewItemBase,
-  type ReviewQueuesSnapshot,
+  type SmartGitSnapshot,
   type UserQueue,
 } from "../types.js";
 
-const log = pino({ name: "fetchQueues" });
+const log = pino({ name: "smartgit-fetch" });
 
 function parseRepos(raw: string): { owner: string; repo: string; fullName: string }[] {
   return raw
@@ -56,7 +57,7 @@ export async function resolveReposFromEnv(
         fullName,
       });
     }
-    log.info({ count: repos.length }, "discovered repositories for review queue");
+    log.info({ count: repos.length }, "discovered repositories for SmartGit");
     return repos;
   }
   return parseRepos(reposEnv);
@@ -104,10 +105,10 @@ export function latestReviewStateByLogin(reviews: ReviewRow[]): Map<string, stri
   return byLogin;
 }
 
-export async function fetchReviewQueues(
+export async function fetchSmartGitSnapshot(
   octokit: InstanceType<typeof Octokit>,
   reposEnv: string
-): Promise<ReviewQueuesSnapshot> {
+): Promise<SmartGitSnapshot> {
   const prMetaMap = await loadPrMetaForRead();
   const repos = await resolveReposFromEnv(octokit, reposEnv);
   const byUser = new Map<string, PendingReviewItem[]>();
@@ -117,6 +118,7 @@ export async function fetchReviewQueues(
   const errors: { repo: string; message: string }[] = [];
   const seenKeys = new Set<string>();
   const seenCreatorKeys = new Set<string>();
+  const allOpenMap = new Map<string, AllOpenPrItemBase>();
 
   const addItem = (login: string, item: PendingReviewItemBase, avatarUrl: string) => {
     const enriched = enrichPendingItem(item, prMetaMap, login);
@@ -232,6 +234,23 @@ export async function fetchReviewQueues(
             );
           }
         }
+
+        const userReq = reviewers.data.users.map((u) => u.login).filter(Boolean) as string[];
+        const teamSlugs = reviewers.data.teams.map((t) => t.slug).filter(Boolean) as string[];
+        allOpenMap.set(`${fullName}#${pr.number}`, {
+          repoFullName: fullName,
+          pullNumber: pr.number,
+          title: pr.title ?? "",
+          htmlUrl: pr.html_url,
+          authorLogin: pr.user?.login ?? "unknown",
+          createdAt: pr.created_at,
+          updatedAt: pr.updated_at,
+          mergeableState,
+          hasReviewRequests: userReq.length > 0 || teamSlugs.length > 0,
+          requestedUserLogins: userReq,
+          requestedTeamSlugs: teamSlugs,
+          changesRequestedBy,
+        });
       }
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
@@ -256,8 +275,13 @@ export async function fetchReviewQueues(
     }))
     .sort((a, b) => a.login.localeCompare(b.login));
 
+  const allOpen = [...allOpenMap.values()]
+    .map((row) => enrichAllOpenPr(row, prMetaMap))
+    .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
+
   return {
     fetchedAt: new Date().toISOString(),
+    allOpen,
     users,
     creators,
     errors,

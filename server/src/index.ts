@@ -7,7 +7,7 @@ import express from "express";
 import { Octokit } from "@octokit/rest";
 import pino from "pino";
 import { pinoHttp } from "pino-http";
-import { fetchReviewQueues } from "./github/fetchQueues.js";
+import { fetchSmartGitSnapshot } from "./github/fetchQueues.js";
 import {
   canPokeAgain,
   enqueuePrMetaUpdate,
@@ -40,17 +40,22 @@ if (!REPOS.trim()) {
 
 const octokit = new Octokit({ auth: GITHUB_TOKEN });
 
-let cache: Awaited<ReturnType<typeof fetchReviewQueues>> | null = null;
+let cache: Awaited<ReturnType<typeof fetchSmartGitSnapshot>> | null = null;
 let refreshPromise: Promise<void> | null = null;
 
 async function refreshCache(): Promise<void> {
   if (refreshPromise) return refreshPromise;
   refreshPromise = (async () => {
     try {
-      log.info("refreshing review queues from GitHub");
-      cache = await fetchReviewQueues(octokit, REPOS);
+      log.info("refreshing SmartGit snapshot from GitHub");
+      cache = await fetchSmartGitSnapshot(octokit, REPOS);
       log.info(
-        { reviewers: cache.users.length, creators: cache.creators.length, errors: cache.errors.length },
+        {
+          allOpen: cache.allOpen.length,
+          reviewers: cache.users.length,
+          creators: cache.creators.length,
+          errors: cache.errors.length,
+        },
         "refresh complete"
       );
     } catch (e) {
@@ -183,7 +188,7 @@ app.post("/api/pr/:owner/:repo/:pullNumber/poke", async (req, res) => {
   }
 
   const lines = [
-    `@${reviewerLogin} friendly reminder to take a look at this PR when you have a moment. _(Review Queues poke)_`,
+    `@${reviewerLogin} friendly reminder to take a look at this PR when you have a moment. _(SmartGit poke)_`,
   ];
   if (note) lines.push(`_Note:_ ${note}`);
   const body = lines.join("\n\n");
@@ -256,7 +261,7 @@ if (fs.existsSync(staticDir)) {
 }
 
 const server = app.listen(PORT, () => {
-  log.info({ port: PORT, pollMs: POLL_MS }, "review-queues server listening");
+  log.info({ port: PORT, pollMs: POLL_MS }, "SmartGit server listening");
 });
 server.on("error", (err: NodeJS.ErrnoException) => {
   if (err.code === "EADDRINUSE") {

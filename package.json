@@ -1,5 +1,5 @@
 {
-  "name": "review-queues",
+  "name": "smartgit",
   "private": true,
   "workspaces": [
     "server",

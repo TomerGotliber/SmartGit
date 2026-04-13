@@ -3,6 +3,8 @@ import {
   PendingReviewKind,
   ReviewSeverity,
   WaitTier as WaitTierConst,
+  type AllOpenPrItem,
+  type AllOpenPrItemBase,
   type PendingReviewItem,
   type PendingReviewItemBase,
   type ReviewSeverityValue,
@@ -69,6 +71,37 @@ export function enrichPendingItem(
     rowReviewerLogin,
     canPokeReviewer,
     nextPokeAt,
+    pokeStatusByReviewer,
+  };
+}
+
+export function enrichAllOpenPr(
+  item: AllOpenPrItemBase,
+  prMetaMap: Record<string, PrMetaEntry>
+): AllOpenPrItem {
+  const key = `${item.repoFullName}#${item.pullNumber}`;
+  const entry = prMetaMap[key] ?? {};
+  const { hoursWaiting, waitTier } = computeWaitMetrics(item.updatedAt);
+  const severity = normalizeSeverity(entry.severity);
+
+  let pokeStatusByReviewer: AllOpenPrItem["pokeStatusByReviewer"];
+  if (item.changesRequestedBy.length > 0) {
+    pokeStatusByReviewer = {};
+    for (const rev of item.changesRequestedBy) {
+      const last = entry.pokes?.[rev];
+      const poke = canPokeAgain(last, Date.now());
+      pokeStatusByReviewer[rev] = {
+        canPoke: poke.ok,
+        ...(poke.nextAt ? { nextPokeAt: poke.nextAt } : {}),
+      };
+    }
+  }
+
+  return {
+    ...item,
+    hoursWaiting,
+    waitTier,
+    severity,
     pokeStatusByReviewer,
   };
 }

@@ -1,12 +1,7 @@
 import { useId, useState } from "react";
 import { PokeCooldownError, patchPrSeverity, postPrPoke } from "./api";
-import {
-  PendingReviewKind,
-  ReviewSeverity,
-  type PendingReviewItem,
-  type SmartGitSnapshot,
-  type ReviewSeverityValue,
-} from "./types";
+import type { AllOpenPrItem, ReviewSeverityValue, SmartGitSnapshot } from "./types";
+import { ReviewSeverity } from "./types";
 
 const ACTOR_STORAGE_KEY = "smartgit-github-login";
 
@@ -59,22 +54,22 @@ function waitTierLabel(tier: number): string {
   return "Critical wait";
 }
 
-function severityLabel(s: NonNullable<PendingReviewItem["severity"]>): string {
+function severityLabel(s: NonNullable<AllOpenPrItem["severity"]>): string {
   if (s === "low") return "Low";
   if (s === "medium") return "Medium";
   return "High";
 }
 
-export function ReviewCard({
-  item,
+export function AllOpenPrCard({
+  pr,
   onSnapshot,
 }: {
-  item: PendingReviewItem;
+  pr: AllOpenPrItem;
   onSnapshot: (snap: SmartGitSnapshot) => void;
 }) {
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [pokeMsg, setPokeMsg] = useState<string | null>(null);
+  const [msg, setMsg] = useState<string | null>(null);
   const [actorLogin, setActorLogin] = useState(() => {
     try {
       return localStorage.getItem(ACTOR_STORAGE_KEY) ?? "";
@@ -83,11 +78,10 @@ export function ReviewCard({
     }
   });
   const panelId = useId();
-  const isCreator = item.kind === PendingReviewKind.ChangesRequested;
-  const mergeState = item.mergeableState?.trim() || null;
-  const [owner, repo] = splitRepo(item.repoFullName);
-  const tier = item.waitTier ?? 0;
-  const hours = item.hoursWaiting ?? 0;
+  const mergeState = pr.mergeableState?.trim() || null;
+  const [owner, repo] = splitRepo(pr.repoFullName);
+  const tier = pr.waitTier ?? 0;
+  const hours = pr.hoursWaiting ?? 0;
 
   const persistActor = (v: string) => {
     setActorLogin(v);
@@ -102,12 +96,12 @@ export function ReviewCard({
   const onSeverityChange = async (v: ReviewSeverityValue) => {
     if (!owner || !repo) return;
     setBusy(true);
-    setPokeMsg(null);
+    setMsg(null);
     try {
-      const snap = await patchPrSeverity(owner, repo, item.pullNumber, v, actorLogin.trim() || undefined);
+      const snap = await patchPrSeverity(owner, repo, pr.pullNumber, v, actorLogin.trim() || undefined);
       onSnapshot(snap);
     } catch (e) {
-      setPokeMsg(e instanceof Error ? e.message : String(e));
+      setMsg(e instanceof Error ? e.message : String(e));
     } finally {
       setBusy(false);
     }
@@ -116,15 +110,15 @@ export function ReviewCard({
   const doPoke = async (reviewerLogin: string) => {
     if (!owner || !repo) return;
     setBusy(true);
-    setPokeMsg(null);
+    setMsg(null);
     try {
-      const snap = await postPrPoke(owner, repo, item.pullNumber, reviewerLogin);
+      const snap = await postPrPoke(owner, repo, pr.pullNumber, reviewerLogin);
       onSnapshot(snap);
     } catch (e) {
       if (e instanceof PokeCooldownError && e.nextPokeAt) {
-        setPokeMsg(`Cooldown until ${formatAbsolute(e.nextPokeAt)}`);
+        setMsg(`Cooldown until ${formatAbsolute(e.nextPokeAt)}`);
       } else {
-        setPokeMsg(e instanceof Error ? e.message : String(e));
+        setMsg(e instanceof Error ? e.message : String(e));
       }
     } finally {
       setBusy(false);
@@ -132,76 +126,79 @@ export function ReviewCard({
   };
 
   return (
-    <article
-      className={`review-card review-card--wait-${tier} ${isCreator ? "review-card--creator-action" : "review-card--awaiting-review"}`}
-    >
+    <article className={`review-card review-card--open-overview review-card--wait-${tier}`}>
       <div className="review-card-wait-bar" aria-hidden title={`~${hours}h since last PR update`} />
 
       <div className="review-card-status-row" aria-label="Pull request status">
-        <span className={`status-pill status-pill--wait-tier status-pill--wait-${tier}`} title="Based on time since PR last updated">
+        <span className={`status-pill status-pill--wait-tier status-pill--wait-${tier}`}>
           {waitTierLabel(tier)} · {hours}h
         </span>
-        {isCreator ? (
-          <span className="status-pill status-pill--danger">Changes requested</span>
+        <span className="status-pill status-pill--open">Open</span>
+        {pr.hasReviewRequests ? (
+          <span className="status-pill status-pill--review">Review requested</span>
         ) : (
-          <span className="status-pill status-pill--review">Needs your review</span>
+          <span className="status-pill status-pill--merge">No pending reviewer</span>
         )}
-        {item.severity ? (
-          <span className={`status-pill status-pill--sev status-pill--sev-${item.severity}`}>
-            Priority: {severityLabel(item.severity)}
+        {pr.changesRequestedBy.length > 0 ? (
+          <span className="status-pill status-pill--danger">Changes requested</span>
+        ) : null}
+        {pr.severity ? (
+          <span className={`status-pill status-pill--sev status-pill--sev-${pr.severity}`}>
+            Priority: {severityLabel(pr.severity)}
           </span>
         ) : null}
         {mergeState ? (
           <span
             className={`status-pill status-pill--merge status-pill--merge-${mergeState.replace(/\W/g, "")}`}
-            title="GitHub merge status for the PR head vs base"
+            title="GitHub merge status"
           >
             {formatMergeable(mergeState)}
           </span>
         ) : null}
       </div>
 
-      <div className="review-card-repo">{item.repoFullName}</div>
+      <div className="review-card-repo">{pr.repoFullName}</div>
       <h3 className="review-card-title">
-        <a href={item.htmlUrl} target="_blank" rel="noreferrer">
-          #{item.pullNumber} · {item.title}
+        <a href={pr.htmlUrl} target="_blank" rel="noreferrer">
+          #{pr.pullNumber} · {pr.title}
         </a>
       </h3>
 
-      {isCreator ? (
-        <div className="review-card-severity">
-          <label className="review-card-severity-label" htmlFor={`sev-${item.repoFullName}-${item.pullNumber}`}>
-            Severity (author)
-          </label>
-          <select
-            id={`sev-${item.repoFullName}-${item.pullNumber}`}
-            className="review-card-select"
-            disabled={busy}
-            value={item.severity ?? ReviewSeverity.None}
-            onChange={(ev) => void onSeverityChange(ev.target.value as ReviewSeverityValue)}
-          >
-            <option value={ReviewSeverity.None}>Not set</option>
-            <option value={ReviewSeverity.Low}>Low</option>
-            <option value={ReviewSeverity.Medium}>Medium</option>
-            <option value={ReviewSeverity.High}>High</option>
-          </select>
-          <input
-            className="review-card-actor"
-            type="text"
-            placeholder="Your GitHub login (if server enforces author)"
-            title="Stored in this browser; sent only if REQUIRE_PR_AUTHOR_FOR_SEVERITY is enabled on the server"
-            value={actorLogin}
-            onChange={(e) => persistActor(e.target.value)}
-          />
+      {(pr.requestedUserLogins.length > 0 || pr.requestedTeamSlugs.length > 0) && (
+        <div className="all-open-requests">
+          {pr.requestedUserLogins.length > 0 ? (
+            <div className="all-open-requests-row">
+              <span className="review-card-changes-label">Reviewers</span>
+              <div className="review-card-mentions">
+                {pr.requestedUserLogins.map((login) => (
+                  <span key={login} className="mention-pill">
+                    @{login}
+                  </span>
+                ))}
+              </div>
+            </div>
+          ) : null}
+          {pr.requestedTeamSlugs.length > 0 ? (
+            <div className="all-open-requests-row">
+              <span className="review-card-changes-label">Teams</span>
+              <div className="review-card-mentions">
+                {pr.requestedTeamSlugs.map((slug) => (
+                  <span key={slug} className="team-badge">
+                    {slug}
+                  </span>
+                ))}
+              </div>
+            </div>
+          ) : null}
         </div>
-      ) : null}
+      )}
 
-      {isCreator && item.changesRequestedBy && item.changesRequestedBy.length > 0 ? (
+      {pr.changesRequestedBy.length > 0 ? (
         <div className="review-card-changes-from">
-          <span className="review-card-changes-label">From</span>
+          <span className="review-card-changes-label">Changes from</span>
           <div className="review-card-mentions review-card-mentions--block">
-            {item.changesRequestedBy.map((login) => {
-              const st = item.pokeStatusByReviewer?.[login];
+            {pr.changesRequestedBy.map((login) => {
+              const st = pr.pokeStatusByReviewer?.[login];
               const canPoke = st?.canPoke !== false;
               return (
                 <div key={login} className="review-card-mention-row">
@@ -212,7 +209,7 @@ export function ReviewCard({
                     disabled={busy || !canPoke}
                     title={
                       canPoke
-                        ? "Post a polite @mention comment on the PR (uses server token)"
+                        ? "Post a poke comment on the PR"
                         : st?.nextPokeAt
                           ? `Next poke after ${formatAbsolute(st.nextPokeAt)}`
                           : "Poke unavailable"
@@ -228,16 +225,40 @@ export function ReviewCard({
         </div>
       ) : null}
 
-      {pokeMsg ? (
+      <div className="review-card-severity">
+        <label className="review-card-severity-label" htmlFor={`sev-open-${pr.repoFullName}-${pr.pullNumber}`}>
+          Severity
+        </label>
+        <select
+          id={`sev-open-${pr.repoFullName}-${pr.pullNumber}`}
+          className="review-card-select"
+          disabled={busy}
+          value={pr.severity ?? ReviewSeverity.None}
+          onChange={(ev) => void onSeverityChange(ev.target.value as ReviewSeverityValue)}
+        >
+          <option value={ReviewSeverity.None}>Not set</option>
+          <option value={ReviewSeverity.Low}>Low</option>
+          <option value={ReviewSeverity.Medium}>Medium</option>
+          <option value={ReviewSeverity.High}>High</option>
+        </select>
+        <input
+          className="review-card-actor"
+          type="text"
+          placeholder="Your GitHub login (if server enforces author)"
+          value={actorLogin}
+          onChange={(e) => persistActor(e.target.value)}
+        />
+      </div>
+
+      {msg ? (
         <p className="review-card-inline-msg" role="status">
-          {pokeMsg}
+          {msg}
         </p>
       ) : null}
 
       <div className="review-card-meta">
-        <span>by @{item.authorLogin}</span>
-        <span>updated {formatRelative(item.updatedAt)}</span>
-        {item.teamSlug ? <span className="team-badge">via team {item.teamSlug}</span> : null}
+        <span>by @{pr.authorLogin}</span>
+        <span>updated {formatRelative(pr.updatedAt)}</span>
       </div>
       <button
         type="button"
@@ -252,11 +273,11 @@ export function ReviewCard({
         <div id={panelId} className="review-card-panel">
           <p className="review-card-panel-row">
             <span className="review-card-panel-label">Opened</span>
-            <span>{formatAbsolute(item.createdAt)}</span>
+            <span>{formatAbsolute(pr.createdAt)}</span>
           </p>
           <p className="review-card-panel-row">
             <span className="review-card-panel-label">Updated</span>
-            <span>{formatAbsolute(item.updatedAt)}</span>
+            <span>{formatAbsolute(pr.updatedAt)}</span>
           </p>
           {mergeState ? (
             <p className="review-card-panel-row">
@@ -265,7 +286,7 @@ export function ReviewCard({
             </p>
           ) : null}
           <p className="review-card-panel-row review-card-panel-link">
-            <a href={item.htmlUrl} target="_blank" rel="noreferrer">
+            <a href={pr.htmlUrl} target="_blank" rel="noreferrer">
               Open pull request on GitHub →
             </a>
           </p>

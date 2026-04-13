@@ -1,12 +1,14 @@
-import type { UserQueue } from "./types";
+import type { SmartGitSnapshot, UserQueue } from "./types";
 import { ReviewCard } from "./ReviewCard";
 
 export function UserColumn({
   user,
   variant,
+  onSnapshot,
 }: {
   user: UserQueue;
   variant: "reviewer" | "creator";
+  onSnapshot: (snap: SmartGitSnapshot) => void;
 }) {
   const subtitle = variant === "creator" ? "Address feedback" : "Awaiting review";
 
@@ -28,6 +30,7 @@ export function UserColumn({
             <ReviewCard
               key={`${item.repoFullName}-${item.pullNumber}-${item.kind}-${item.teamSlug ?? ""}`}
               item={item}
+              onSnapshot={onSnapshot}
             />
           ))
         )}
