@@ -22,18 +22,19 @@ export async function verifyReviewerMayBePoked(
   pullNumber: number,
   reviewerLogin: string
 ): Promise<boolean> {
+  const target = reviewerLogin.toLowerCase();
   const { data } = await octokit.pulls.listRequestedReviewers({
     owner,
     repo,
     pull_number: pullNumber,
   });
   for (const u of data.users) {
-    if (u.login === reviewerLogin) return true;
+    if (u.login?.toLowerCase() === target) return true;
   }
   for (const team of data.teams) {
     if (!team.slug) continue;
     const members = await listTeamMemberLogins(octokit, owner, team.slug);
-    if (members.includes(reviewerLogin)) return true;
+    if (members.some((m) => m.toLowerCase() === target)) return true;
   }
   const reviews = await octokit.paginate(octokit.rest.pulls.listReviews, {
     owner,
@@ -42,5 +43,8 @@ export async function verifyReviewerMayBePoked(
     per_page: 100,
   });
   const latest = latestReviewStateByLogin(reviews);
-  return latest.get(reviewerLogin) === "CHANGES_REQUESTED";
+  for (const [login, state] of latest.entries()) {
+    if (login.toLowerCase() === target && state === "CHANGES_REQUESTED") return true;
+  }
+  return false;
 }

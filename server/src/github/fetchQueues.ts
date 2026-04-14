@@ -385,7 +385,9 @@ export async function fetchSmartGitSnapshot(
     .map(([login, items]) => ({
       login,
       avatarUrl: userMeta.get(login)?.avatarUrl ?? `https://github.com/${login}.png?size=64`,
-      items: items.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()),
+      items: items
+        .map((i) => ({ ...i, rowReviewerLogin: login }))
+        .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()),
     }))
     .sort((a, b) => a.login.localeCompare(b.login));
 
