@@ -12,6 +12,54 @@ import {
 
 const log = pino({ name: "smartgit-fetch" });
 
+interface GqlProjectsPage {
+  repository: {
+    pullRequests: {
+      pageInfo: { hasNextPage: boolean; endCursor: string | null };
+      nodes: {
+        number: number;
+        projectsV2: { nodes: { title: string | null }[] };
+      }[];
+    };
+  };
+}
+
+async function fetchProjectsForOpenPrs(
+  octokit: InstanceType<typeof Octokit>,
+  owner: string,
+  repo: string
+): Promise<Map<number, string[]>> {
+  const out = new Map<number, string[]>();
+  let cursor: string | null = null;
+  try {
+    for (let i = 0; i < 20; i++) {
+      const data: GqlProjectsPage = await octokit.graphql(
+        `query($owner:String!,$name:String!,$cursor:String){
+          repository(owner:$owner,name:$name){
+            pullRequests(states:OPEN, first:50, after:$cursor){
+              pageInfo{ hasNextPage endCursor }
+              nodes{
+                number
+                projectsV2(first:5){ nodes{ title } }
+              }
+            }
+          }
+        }`,
+        { owner, name: repo, cursor }
+      );
+      for (const n of data.repository.pullRequests.nodes) {
+        const titles = n.projectsV2.nodes.map((p) => p.title).filter((t): t is string => Boolean(t));
+        if (titles.length > 0) out.set(n.number, titles);
+      }
+      if (!data.repository.pullRequests.pageInfo.hasNextPage) break;
+      cursor = data.repository.pullRequests.pageInfo.endCursor;
+    }
+  } catch (e) {
+    log.warn({ err: e, owner, repo }, "projectsV2 fetch failed; projects will be empty for this repo");
+  }
+  return out;
+}
+
 /** Resolved once per process; token user for client “my dashboard”. */
 let cachedTokenLogin: string | null | undefined;
 
@@ -269,12 +317,15 @@ export async function fetchSmartGitSnapshot(
         per_page: 100,
       });
 
+      const projectsByPr = await fetchProjectsForOpenPrs(octokit, owner, repo);
+
       for (const pr of pulls) {
         if (pr.draft) continue;
 
         const mergeableState =
           (pr as { mergeable_state?: string | null }).mergeable_state ?? null;
         const baseRef = pr.base?.ref?.trim() || null;
+        const projects = projectsByPr.get(pr.number) ?? [];
 
         const reviews = await octokit.paginate(octokit.rest.pulls.listReviews, {
           owner,
@@ -303,6 +354,7 @@ export async function fetchSmartGitSnapshot(
             mergeableState,
             baseRef,
             changesRequestedBy,
+            projects,
           };
           addCreatorItem(
             authorLogin,
@@ -329,6 +381,7 @@ export async function fetchSmartGitSnapshot(
           kind: PendingReviewKind.AwaitingReview,
           mergeableState,
           baseRef,
+          projects,
         };
 
         for (const u of reviewers.data.users) {
@@ -372,6 +425,7 @@ export async function fetchSmartGitSnapshot(
           requestedUserLogins: userReq,
           requestedTeamSlugs: teamSlugs,
           changesRequestedBy,
+          projects,
         });
       }
     } catch (e) {

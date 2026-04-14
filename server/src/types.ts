@@ -47,6 +47,8 @@ export interface PendingReviewItem {
   severity: Exclude<ReviewSeverityValue, "none"> | null;
   /** Reviewer this row is for (awaiting_review); used for display. */
   rowReviewerLogin?: string;
+  /** GitHub Projects (v2) this PR is attached to. */
+  projects?: string[];
 }
 
 /** Built from GitHub before local meta (wait tier, severity) is applied. */
@@ -76,6 +78,7 @@ export interface AllOpenPrItem {
   requestedUserLogins: string[];
   requestedTeamSlugs: string[];
   changesRequestedBy: string[];
+  projects?: string[];
   hoursWaiting: number;
   waitTier: WaitTier;
   severity: Exclude<ReviewSeverityValue, "none"> | null;

@@ -32,6 +32,7 @@ const FILTERS_STORAGE_KEY = "smartgit-filters-v1";
 type PersistedFilters = {
   focusRepos?: string[];
   focusLogins?: string[];
+  focusProjects?: string[];
   onlyMe?: string | null;
   myViewOnly?: boolean;
   activeTeam?: string | null;
@@ -148,6 +149,7 @@ export function App() {
   const [focusLogins, setFocusLogins] = useState<Set<string>>(() => new Set(persisted.focusLogins ?? []));
   const [myViewOnly, setMyViewOnly] = useState(() => Boolean(persisted.myViewOnly));
   const [focusRepos, setFocusRepos] = useState<Set<string>>(() => new Set(persisted.focusRepos ?? []));
+  const [focusProjects, setFocusProjects] = useState<Set<string>>(() => new Set(persisted.focusProjects ?? []));
   const [activeTeam, setActiveTeam] = useState<string | null>(() => persisted.activeTeam ?? null);
   const [branchRepo, setBranchRepo] = useState<string | null>(null);
 
@@ -156,6 +158,7 @@ export function App() {
       const payload: PersistedFilters = {
         focusRepos: Array.from(focusRepos),
         focusLogins: Array.from(focusLogins),
+        focusProjects: Array.from(focusProjects),
         myViewOnly,
         activeTeam,
       };
@@ -163,7 +166,7 @@ export function App() {
     } catch {
       /* ignore */
     }
-  }, [focusRepos, focusLogins, myViewOnly, activeTeam]);
+  }, [focusRepos, focusLogins, focusProjects, myViewOnly, activeTeam]);
   const [fullscreen, setFullscreen] = useState(false);
 
   useEffect(() => {
@@ -262,6 +265,41 @@ export function App() {
     return { repoNames: names, repoCounts: counts };
   }, [users, creators]);
 
+  const projectNames = useMemo(() => {
+    const counts = new Map<string, number>();
+    const seen = new Set<string>();
+    const bump = (repo: string, pull: number, projects?: string[]) => {
+      const k = `${repo}#${pull}`;
+      if (seen.has(k)) return;
+      seen.add(k);
+      for (const p of projects ?? []) counts.set(p, (counts.get(p) ?? 0) + 1);
+    };
+    for (const u of users) for (const i of u.items) bump(i.repoFullName, i.pullNumber, i.projects);
+    for (const u of creators) for (const i of u.items) bump(i.repoFullName, i.pullNumber, i.projects);
+    return { names: Array.from(counts.keys()).sort((a, b) => a.localeCompare(b)), counts };
+  }, [users, creators]);
+
+  useEffect(() => {
+    const valid = new Set(projectNames.names);
+    setFocusProjects((prev) => {
+      if (prev.size === 0) return prev;
+      const next = new Set<string>();
+      for (const p of prev) if (valid.has(p)) next.add(p);
+      return next.size === prev.size ? prev : next;
+    });
+  }, [projectNames]);
+
+  const toggleFocusProject = useCallback((p: string) => {
+    setFocusProjects((prev) => {
+      const next = new Set(prev);
+      if (next.has(p)) next.delete(p);
+      else next.add(p);
+      return next;
+    });
+  }, []);
+
+  const clearProjectFocus = useCallback(() => setFocusProjects(new Set()), []);
+
   const visibleRepoNames = useMemo(() => {
     if (!activeTeam) return repoNames;
     const team = TEAMS.find((t) => t.name === activeTeam);
@@ -296,13 +334,13 @@ export function App() {
   }, [activeTeam, focusRepos, visibleRepoNames]);
 
   const visibleUsers = useMemo(
-    () => filterQueues(users, focusLogins, onlyMe, effectiveFocusRepos),
-    [users, focusLogins, onlyMe, effectiveFocusRepos]
+    () => filterQueues(users, focusLogins, onlyMe, effectiveFocusRepos, focusProjects),
+    [users, focusLogins, onlyMe, effectiveFocusRepos, focusProjects]
   );
 
   const visibleCreators = useMemo(
-    () => filterQueues(creators, focusLogins, onlyMe, effectiveFocusRepos),
-    [creators, focusLogins, onlyMe, effectiveFocusRepos]
+    () => filterQueues(creators, focusLogins, onlyMe, effectiveFocusRepos, focusProjects),
+    [creators, focusLogins, onlyMe, effectiveFocusRepos, focusProjects]
   );
 
   const peopleForChips = useMemo(() => {
@@ -503,6 +541,32 @@ export function App() {
                   </button>
                 );
               })}
+            </div>
+          </div>
+        ) : null}
+        {projectNames.names.length > 0 ? (
+          <div className="chip-board">
+            <p className="chip-board-label">Projects</p>
+            <div className="reviewer-chips" role="group" aria-label="Filter by project">
+              <button
+                type="button"
+                className={`chip chip--repo ${focusProjects.size === 0 ? "chip--active" : ""}`}
+                onClick={clearProjectFocus}
+              >
+                All projects
+              </button>
+              {projectNames.names.map((p) => (
+                <button
+                  key={p}
+                  type="button"
+                  className={`chip chip--repo ${focusProjects.has(p) ? "chip--active" : ""}`}
+                  onClick={() => toggleFocusProject(p)}
+                  title={p}
+                >
+                  <span className="chip-repo-name">{p}</span>
+                  <span className="chip-count">{projectNames.counts.get(p) ?? 0}</span>
+                </button>
+              ))}
             </div>
           </div>
         ) : null}

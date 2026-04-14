@@ -277,6 +277,15 @@ export function ReviewCard({
       >
         <span title={item.repoFullName}>{formatRepoDisplayLabel(item.repoFullName)}</span>
       </div>
+      {item.projects && item.projects.length > 0 ? (
+        <div className="review-card-projects" title={`GitHub Projects: ${item.projects.join(", ")}`}>
+          {item.projects.map((p) => (
+            <span key={p} className="review-card-project">
+              {p}
+            </span>
+          ))}
+        </div>
+      ) : null}
       <h3 className="review-card-title">
         <a href={item.htmlUrl} target="_blank" rel="noreferrer">
           #{item.pullNumber} · {item.title}

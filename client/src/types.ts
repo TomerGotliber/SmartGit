@@ -39,6 +39,7 @@ export interface PendingReviewItem {
   waitTier: WaitTier;
   severity: "low" | "medium" | "high" | null;
   rowReviewerLogin?: string;
+  projects?: string[];
 }
 
 export interface UserQueue {
