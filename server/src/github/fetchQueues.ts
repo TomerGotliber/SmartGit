@@ -272,7 +272,141 @@ export async function fetchSmartGitSnapshot(
     if (!creatorMeta.has(login)) creatorMeta.set(login, { avatarUrl });
   };
 
-  for (const { owner, repo, fullName } of repos) {
+  const REPO_CONCURRENCY = 6;
+  const PR_CONCURRENCY = 8;
+
+  async function processPr(
+    pr: Awaited<ReturnType<typeof octokit.rest.pulls.list>>["data"][number],
+    owner: string,
+    repo: string,
+    fullName: string
+  ) {
+    const mergeableState =
+      (pr as { mergeable_state?: string | null }).mergeable_state ?? null;
+    const baseRef = pr.base?.ref?.trim() || null;
+    const projects = extractLabelsFromPr(pr);
+
+    if (pr.draft) {
+      allOpenMap.set(`${fullName}#${pr.number}`, {
+        repoFullName: fullName,
+        pullNumber: pr.number,
+        title: pr.title ?? "",
+        htmlUrl: pr.html_url,
+        authorLogin: pr.user?.login ?? "unknown",
+        createdAt: pr.created_at,
+        updatedAt: pr.updated_at,
+        mergeableState,
+        baseRef,
+        hasReviewRequests: false,
+        requestedUserLogins: [],
+        requestedTeamSlugs: [],
+        changesRequestedBy: [],
+        projects,
+      });
+      return;
+    }
+
+    const [reviews, reviewers] = await Promise.all([
+      octokit.paginate(octokit.rest.pulls.listReviews, {
+        owner,
+        repo,
+        pull_number: pr.number,
+        per_page: 100,
+      }),
+      octokit.rest.pulls.listRequestedReviewers({ owner, repo, pull_number: pr.number }),
+    ]);
+
+    const latestByLogin = latestReviewStateByLogin(reviews);
+    const changesRequestedBy = [...latestByLogin.entries()]
+      .filter(([, state]) => state === "CHANGES_REQUESTED")
+      .map(([login]) => login)
+      .sort((a, b) => a.localeCompare(b));
+
+    const authorLogin = pr.user?.login;
+    if (changesRequestedBy.length > 0 && authorLogin) {
+      const creatorItem: PendingReviewItemBase = {
+        repoFullName: fullName,
+        pullNumber: pr.number,
+        title: pr.title,
+        htmlUrl: pr.html_url,
+        authorLogin,
+        createdAt: pr.created_at,
+        updatedAt: pr.updated_at,
+        draft: pr.draft ?? false,
+        kind: PendingReviewKind.ChangesRequested,
+        mergeableState,
+        baseRef,
+        changesRequestedBy,
+        projects,
+      };
+      addCreatorItem(
+        authorLogin,
+        creatorItem,
+        pr.user?.avatar_url ?? `https://github.com/${authorLogin}.png?size=64`
+      );
+    }
+
+    const baseItem: Omit<PendingReviewItemBase, "teamSlug"> = {
+      repoFullName: fullName,
+      pullNumber: pr.number,
+      title: pr.title,
+      htmlUrl: pr.html_url,
+      authorLogin: pr.user?.login ?? "unknown",
+      createdAt: pr.created_at,
+      updatedAt: pr.updated_at,
+      draft: pr.draft ?? false,
+      kind: PendingReviewKind.AwaitingReview,
+      mergeableState,
+      baseRef,
+      projects,
+    };
+
+    for (const u of reviewers.data.users) {
+      if (!u.login) continue;
+      addItem(u.login, { ...baseItem }, u.avatar_url);
+    }
+
+    for (const team of reviewers.data.teams) {
+      if (!team.slug) continue;
+      const item: PendingReviewItemBase = { ...baseItem, teamSlug: team.slug };
+      try {
+        const members = await listTeamMemberLogins(octokit, owner, team.slug);
+        if (members.length === 0) {
+          log.warn({ repo: fullName, pr: pr.number, team: team.slug }, "team has no listed members");
+          continue;
+        }
+        for (const login of members) {
+          addItem(login, { ...item }, `https://github.com/${login}.png?size=64`);
+        }
+      } catch (e) {
+        log.warn(
+          { err: e, repo: fullName, team: team.slug },
+          "could not expand team members; skipping team request"
+        );
+      }
+    }
+
+    const userReq = reviewers.data.users.map((u) => u.login).filter(Boolean) as string[];
+    const teamSlugs = reviewers.data.teams.map((t) => t.slug).filter(Boolean) as string[];
+    allOpenMap.set(`${fullName}#${pr.number}`, {
+      repoFullName: fullName,
+      pullNumber: pr.number,
+      title: pr.title ?? "",
+      htmlUrl: pr.html_url,
+      authorLogin: pr.user?.login ?? "unknown",
+      createdAt: pr.created_at,
+      updatedAt: pr.updated_at,
+      mergeableState,
+      baseRef,
+      hasReviewRequests: userReq.length > 0 || teamSlugs.length > 0,
+      requestedUserLogins: userReq,
+      requestedTeamSlugs: teamSlugs,
+      changesRequestedBy,
+      projects,
+    });
+  }
+
+  async function processRepo(owner: string, repo: string, fullName: string) {
     try {
       const pulls = await octokit.paginate(octokit.rest.pulls.list, {
         owner,
@@ -280,140 +414,33 @@ export async function fetchSmartGitSnapshot(
         state: "open",
         per_page: 100,
       });
-
-      for (const pr of pulls) {
-        const mergeableState =
-          (pr as { mergeable_state?: string | null }).mergeable_state ?? null;
-        const baseRef = pr.base?.ref?.trim() || null;
-        const projects = extractLabelsFromPr(pr);
-
-        if (pr.draft) {
-          allOpenMap.set(`${fullName}#${pr.number}`, {
-            repoFullName: fullName,
-            pullNumber: pr.number,
-            title: pr.title ?? "",
-            htmlUrl: pr.html_url,
-            authorLogin: pr.user?.login ?? "unknown",
-            createdAt: pr.created_at,
-            updatedAt: pr.updated_at,
-            mergeableState,
-            baseRef,
-            hasReviewRequests: false,
-            requestedUserLogins: [],
-            requestedTeamSlugs: [],
-            changesRequestedBy: [],
-            projects,
-          });
-          continue;
+      log.info({ repo: fullName, prs: pulls.length }, "processing repo pulls");
+      let prIdx = 0;
+      async function prWorker() {
+        while (true) {
+          const j = prIdx++;
+          if (j >= pulls.length) return;
+          await processPr(pulls[j]!, owner, repo, fullName);
         }
-
-        const reviews = await octokit.paginate(octokit.rest.pulls.listReviews, {
-          owner,
-          repo,
-          pull_number: pr.number,
-          per_page: 100,
-        });
-        const latestByLogin = latestReviewStateByLogin(reviews);
-        const changesRequestedBy = [...latestByLogin.entries()]
-          .filter(([, state]) => state === "CHANGES_REQUESTED")
-          .map(([login]) => login)
-          .sort((a, b) => a.localeCompare(b));
-
-        const authorLogin = pr.user?.login;
-        if (changesRequestedBy.length > 0 && authorLogin) {
-          const creatorItem: PendingReviewItemBase = {
-            repoFullName: fullName,
-            pullNumber: pr.number,
-            title: pr.title,
-            htmlUrl: pr.html_url,
-            authorLogin,
-            createdAt: pr.created_at,
-            updatedAt: pr.updated_at,
-            draft: pr.draft ?? false,
-            kind: PendingReviewKind.ChangesRequested,
-            mergeableState,
-            baseRef,
-            changesRequestedBy,
-            projects,
-          };
-          addCreatorItem(
-            authorLogin,
-            creatorItem,
-            pr.user?.avatar_url ?? `https://github.com/${authorLogin}.png?size=64`
-          );
-        }
-
-        const reviewers = await octokit.rest.pulls.listRequestedReviewers({
-          owner,
-          repo,
-          pull_number: pr.number,
-        });
-
-        const baseItem: Omit<PendingReviewItemBase, "teamSlug"> = {
-          repoFullName: fullName,
-          pullNumber: pr.number,
-          title: pr.title,
-          htmlUrl: pr.html_url,
-          authorLogin: pr.user?.login ?? "unknown",
-          createdAt: pr.created_at,
-          updatedAt: pr.updated_at,
-          draft: pr.draft ?? false,
-          kind: PendingReviewKind.AwaitingReview,
-          mergeableState,
-          baseRef,
-          projects,
-        };
-
-        for (const u of reviewers.data.users) {
-          if (!u.login) continue;
-          addItem(u.login, { ...baseItem }, u.avatar_url);
-        }
-
-        for (const team of reviewers.data.teams) {
-          if (!team.slug) continue;
-          const item: PendingReviewItemBase = { ...baseItem, teamSlug: team.slug };
-          try {
-            const members = await listTeamMemberLogins(octokit, owner, team.slug);
-            if (members.length === 0) {
-              log.warn({ repo: fullName, pr: pr.number, team: team.slug }, "team has no listed members");
-              continue;
-            }
-            for (const login of members) {
-              addItem(login, { ...item }, `https://github.com/${login}.png?size=64`);
-            }
-          } catch (e) {
-            log.warn(
-              { err: e, repo: fullName, team: team.slug },
-              "could not expand team members; skipping team request"
-            );
-          }
-        }
-
-        const userReq = reviewers.data.users.map((u) => u.login).filter(Boolean) as string[];
-        const teamSlugs = reviewers.data.teams.map((t) => t.slug).filter(Boolean) as string[];
-        allOpenMap.set(`${fullName}#${pr.number}`, {
-          repoFullName: fullName,
-          pullNumber: pr.number,
-          title: pr.title ?? "",
-          htmlUrl: pr.html_url,
-          authorLogin: pr.user?.login ?? "unknown",
-          createdAt: pr.created_at,
-          updatedAt: pr.updated_at,
-          mergeableState,
-          baseRef,
-          hasReviewRequests: userReq.length > 0 || teamSlugs.length > 0,
-          requestedUserLogins: userReq,
-          requestedTeamSlugs: teamSlugs,
-          changesRequestedBy,
-          projects,
-        });
       }
+      await Promise.all(Array.from({ length: PR_CONCURRENCY }, () => prWorker()));
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
       log.error({ repo: fullName, err: message }, "failed to fetch repo pulls");
       errors.push({ repo: fullName, message });
     }
   }
+
+  let repoIdx = 0;
+  async function repoWorker() {
+    while (true) {
+      const i = repoIdx++;
+      if (i >= repos.length) return;
+      const { owner, repo, fullName } = repos[i]!;
+      await processRepo(owner, repo, fullName);
+    }
+  }
+  await Promise.all(Array.from({ length: REPO_CONCURRENCY }, () => repoWorker()));
 
   const users: UserQueue[] = [...byUser.entries()]
     .map(([login, items]) => ({
