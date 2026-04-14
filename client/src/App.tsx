@@ -267,17 +267,12 @@ export function App() {
 
   const projectNames = useMemo(() => {
     const counts = new Map<string, number>();
-    const seen = new Set<string>();
-    const bump = (repo: string, pull: number, projects?: string[]) => {
-      const k = `${repo}#${pull}`;
-      if (seen.has(k)) return;
-      seen.add(k);
-      for (const p of projects ?? []) counts.set(p, (counts.get(p) ?? 0) + 1);
-    };
-    for (const u of users) for (const i of u.items) bump(i.repoFullName, i.pullNumber, i.projects);
-    for (const u of creators) for (const i of u.items) bump(i.repoFullName, i.pullNumber, i.projects);
+    const allOpen = data?.allOpen ?? [];
+    for (const pr of allOpen) {
+      for (const p of pr.projects ?? []) counts.set(p, (counts.get(p) ?? 0) + 1);
+    }
     return { names: Array.from(counts.keys()).sort((a, b) => a.localeCompare(b)), counts };
-  }, [users, creators]);
+  }, [data]);
 
   useEffect(() => {
     const valid = new Set(projectNames.names);
@@ -546,14 +541,14 @@ export function App() {
         ) : null}
         {projectNames.names.length > 0 ? (
           <div className="chip-board">
-            <p className="chip-board-label">Projects</p>
-            <div className="reviewer-chips" role="group" aria-label="Filter by project">
+            <p className="chip-board-label">Versions</p>
+            <div className="reviewer-chips" role="group" aria-label="Filter by version">
               <button
                 type="button"
                 className={`chip chip--repo ${focusProjects.size === 0 ? "chip--active" : ""}`}
                 onClick={clearProjectFocus}
               >
-                All projects
+                All versions
               </button>
               {projectNames.names.map((p) => (
                 <button

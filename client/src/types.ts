@@ -62,6 +62,7 @@ export interface AllOpenPrItem {
   requestedUserLogins: string[];
   requestedTeamSlugs: string[];
   changesRequestedBy: string[];
+  projects?: string[];
   hoursWaiting: number;
   waitTier: WaitTier;
   severity: "low" | "medium" | "high" | null;
