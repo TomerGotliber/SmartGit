@@ -77,6 +77,34 @@ export async function postRefresh(): Promise<SmartGitSnapshot> {
   return normalizeSnapshot(raw);
 }
 
+export interface BranchInfo {
+  name: string;
+  protected: boolean;
+  ahead: number;
+  behind: number;
+  base: string | null;
+  compared?: boolean;
+  prs?: { number: number; title: string; htmlUrl: string; draft: boolean }[];
+}
+
+export interface RepoBranchesResponse {
+  owner: string;
+  repo: string;
+  defaultBranch: string;
+  totalBranches: number;
+  truncated: boolean;
+  branches: BranchInfo[];
+}
+
+export async function fetchRepoBranches(owner: string, repo: string): Promise<RepoBranchesResponse> {
+  const res = await fetch(`/api/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/branches`);
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(text || res.statusText);
+  }
+  return (await res.json()) as RepoBranchesResponse;
+}
+
 export async function postPrPoke(
   owner: string,
   repo: string,

@@ -193,6 +193,100 @@ app.post("/api/pr/:owner/:repo/:pullNumber/poke", async (req, res) => {
   res.json(cache);
 });
 
+app.get("/api/repos/:owner/:repo/branches", async (req, res) => {
+  const { owner, repo } = req.params;
+  if (!owner || !repo) {
+    res.status(400).json({ error: "Invalid path" });
+    return;
+  }
+  try {
+    const repoInfo = await octokit.repos.get({ owner, repo });
+    const defaultBranch = repoInfo.data.default_branch;
+
+    const pulls = await octokit.paginate(octokit.pulls.list, {
+      owner,
+      repo,
+      state: "open",
+      per_page: 100,
+    });
+
+    const prsByHead = new Map<string, { number: number; title: string; htmlUrl: string; draft: boolean }[]>();
+    for (const p of pulls) {
+      const head = p.head?.ref;
+      if (!head) continue;
+      const list = prsByHead.get(head) ?? [];
+      list.push({ number: p.number, title: p.title, htmlUrl: p.html_url, draft: Boolean(p.draft) });
+      prsByHead.set(head, list);
+    }
+
+    const ROOT_CANDIDATES = ["master", "main", "staging", "stage", "dev", "develop", "development", "release", "production", "prod"];
+    const wantedNames = new Set<string>([defaultBranch, ...ROOT_CANDIDATES, ...prsByHead.keys()]);
+
+    type BranchResult = {
+      name: string;
+      protected: boolean;
+      ahead: number;
+      behind: number;
+      base: string | null;
+      compared: boolean;
+      prs: { number: number; title: string; htmlUrl: string; draft: boolean }[];
+    };
+
+    const names = Array.from(wantedNames);
+    const CONCURRENCY = 12;
+    const results: (BranchResult | null)[] = new Array(names.length).fill(null);
+
+    let next = 0;
+    async function worker() {
+      while (true) {
+        const i = next++;
+        if (i >= names.length) return;
+        const name = names[i]!;
+        const prs = prsByHead.get(name) ?? [];
+        if (name === defaultBranch) {
+          results[i] = { name, protected: false, ahead: 0, behind: 0, base: null, compared: true, prs };
+          continue;
+        }
+        try {
+          const cmp = await octokit.repos.compareCommitsWithBasehead({
+            owner,
+            repo,
+            basehead: `${defaultBranch}...${name}`,
+          });
+          results[i] = {
+            name,
+            protected: false,
+            ahead: cmp.data.ahead_by,
+            behind: cmp.data.behind_by,
+            base: defaultBranch,
+            compared: true,
+            prs,
+          };
+        } catch {
+          // 404 = root candidate doesn't exist in this repo; drop it silently
+          results[i] = null;
+        }
+      }
+    }
+    await Promise.all(Array.from({ length: CONCURRENCY }, () => worker()));
+
+    const branches = results.filter((b): b is BranchResult => b !== null);
+
+    res.json({
+      owner,
+      repo,
+      defaultBranch,
+      totalBranches: branches.length,
+      truncated: false,
+      branches,
+    });
+  } catch (e) {
+    log.warn({ err: e, owner, repo }, "branches: GitHub fetch failed");
+    const status = (e as { status?: number })?.status === 404 ? 404 : 502;
+    res.status(status).json({ error: "Could not fetch branches from GitHub" });
+  }
+});
+
 app.get("/api/health", (_req, res) => {
   res.json({ ok: true });
 });

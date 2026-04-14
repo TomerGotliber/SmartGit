@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { fetchQueues, postRefresh } from "./api";
+import { BranchTreeModal } from "./BranchTreeModal";
 import { filterQueues } from "./filterQueues";
 import { formatRepoDisplayLabel } from "./repoDisplay";
 import type { SmartGitSnapshot, UserQueue } from "./types";
@@ -7,6 +8,44 @@ import { UserColumn } from "./UserColumn";
 
 const POLL_MS = 60_000;
 const ACTOR_LOGIN_STORAGE_KEY = "smartgit-github-login";
+
+const TEAMS: { name: string; repos: string[] }[] = [
+  {
+    name: "CORE",
+    repos: [
+      "CameraDevOps",
+      "SmartCameras",
+      "CameraK8S",
+      "CorDBSync",
+      "SmartCamerasKPI",
+      "SCToolShed",
+      "CorsightCICD",
+      "CameraEngine",
+      "FortifyWeb",
+    ],
+  },
+  { name: "Research", repos: ["CorsightTraining", "CameraEngine", "CameraResearch", "SmartCamerasKPI"] },
+];
+
+const FILTERS_STORAGE_KEY = "smartgit-filters-v1";
+
+type PersistedFilters = {
+  focusRepos?: string[];
+  focusLogins?: string[];
+  onlyMe?: string | null;
+  myViewOnly?: boolean;
+  activeTeam?: string | null;
+};
+
+function loadPersistedFilters(): PersistedFilters {
+  try {
+    const raw = localStorage.getItem(FILTERS_STORAGE_KEY);
+    if (!raw) return {};
+    return JSON.parse(raw) as PersistedFilters;
+  } catch {
+    return {};
+  }
+}
 
 function formatFetchedAt(iso: string): string {
   try {
@@ -105,9 +144,26 @@ export function App() {
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [wallMode, setWallMode] = useState(false);
-  const [focusLogins, setFocusLogins] = useState<Set<string>>(() => new Set());
-  const [myViewOnly, setMyViewOnly] = useState(false);
-  const [focusRepos, setFocusRepos] = useState<Set<string>>(() => new Set());
+  const persisted = useMemo(() => loadPersistedFilters(), []);
+  const [focusLogins, setFocusLogins] = useState<Set<string>>(() => new Set(persisted.focusLogins ?? []));
+  const [myViewOnly, setMyViewOnly] = useState(() => Boolean(persisted.myViewOnly));
+  const [focusRepos, setFocusRepos] = useState<Set<string>>(() => new Set(persisted.focusRepos ?? []));
+  const [activeTeam, setActiveTeam] = useState<string | null>(() => persisted.activeTeam ?? null);
+  const [branchRepo, setBranchRepo] = useState<string | null>(null);
+
+  useEffect(() => {
+    try {
+      const payload: PersistedFilters = {
+        focusRepos: Array.from(focusRepos),
+        focusLogins: Array.from(focusLogins),
+        myViewOnly,
+        activeTeam,
+      };
+      localStorage.setItem(FILTERS_STORAGE_KEY, JSON.stringify(payload));
+    } catch {
+      /* ignore */
+    }
+  }, [focusRepos, focusLogins, myViewOnly, activeTeam]);
   const [fullscreen, setFullscreen] = useState(false);
 
   useEffect(() => {
@@ -206,6 +262,17 @@ export function App() {
     return { repoNames: names, repoCounts: counts };
   }, [users, creators]);
 
+  const visibleRepoNames = useMemo(() => {
+    if (!activeTeam) return repoNames;
+    const team = TEAMS.find((t) => t.name === activeTeam);
+    if (!team) return repoNames;
+    const wanted = new Set(team.repos.map((n) => n.toLowerCase()));
+    return repoNames.filter((full) => {
+      const short = full.includes("/") ? full.split("/")[1]! : full;
+      return wanted.has(short.toLowerCase());
+    });
+  }, [repoNames, activeTeam]);
+
   useEffect(() => {
     const valid = new Set(repoNames);
     setFocusRepos((prev) => {
@@ -219,14 +286,23 @@ export function App() {
   const meNormalized = (data?.actorLogin ?? "").trim().toLowerCase();
   const onlyMe = myViewOnly && meNormalized ? meNormalized : null;
 
+  const effectiveFocusRepos = useMemo(() => {
+    if (!activeTeam) return focusRepos;
+    const teamSet = new Set(visibleRepoNames);
+    if (focusRepos.size === 0) return teamSet;
+    const intersected = new Set<string>();
+    for (const r of focusRepos) if (teamSet.has(r)) intersected.add(r);
+    return intersected.size > 0 ? intersected : teamSet;
+  }, [activeTeam, focusRepos, visibleRepoNames]);
+
   const visibleUsers = useMemo(
-    () => filterQueues(users, focusLogins, onlyMe, focusRepos),
-    [users, focusLogins, onlyMe, focusRepos]
+    () => filterQueues(users, focusLogins, onlyMe, effectiveFocusRepos),
+    [users, focusLogins, onlyMe, effectiveFocusRepos]
   );
 
   const visibleCreators = useMemo(
-    () => filterQueues(creators, focusLogins, onlyMe, focusRepos),
-    [creators, focusLogins, onlyMe, focusRepos]
+    () => filterQueues(creators, focusLogins, onlyMe, effectiveFocusRepos),
+    [creators, focusLogins, onlyMe, effectiveFocusRepos]
   );
 
   const peopleForChips = useMemo(() => {
@@ -296,6 +372,11 @@ export function App() {
   }, []);
 
   const clearRepoFocus = useCallback(() => setFocusRepos(new Set()), []);
+
+  const toggleTeam = useCallback((teamName: string) => {
+    setActiveTeam((prev) => (prev === teamName ? null : teamName));
+    setFocusRepos(new Set());
+  }, []);
 
   const toggleFocusRepo = useCallback((repo: string) => {
     setFocusRepos((prev) => {
@@ -392,6 +473,41 @@ export function App() {
       <div className="interactive-toolbar">
         {repoNames.length > 0 ? (
           <div className="chip-board">
+            <p className="chip-board-label">Teams</p>
+            <div className="reviewer-chips" role="group" aria-label="Filter by team">
+              <button
+                type="button"
+                className={`chip chip--repo ${activeTeam === null ? "chip--active" : ""}`}
+                onClick={() => {
+                  setActiveTeam(null);
+                  setFocusRepos(new Set());
+                }}
+              >
+                All teams
+              </button>
+              {TEAMS.map((t) => {
+                const teamFullNames = repoNames.filter((full) => {
+                  const short = full.includes("/") ? full.split("/")[1]! : full;
+                  return t.repos.map((r) => r.toLowerCase()).includes(short.toLowerCase());
+                });
+                return (
+                  <button
+                    key={t.name}
+                    type="button"
+                    className={`chip chip--repo ${activeTeam === t.name ? "chip--active" : ""}`}
+                    onClick={() => toggleTeam(t.name)}
+                    title={`Filter to ${t.name}: ${t.repos.join(", ")}`}
+                  >
+                    <span className="chip-repo-name">{t.name}</span>
+                    <span className="chip-count">{teamFullNames.length}</span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        ) : null}
+        {repoNames.length > 0 ? (
+          <div className="chip-board">
             <p className="chip-board-label">Repositories</p>
             <div className="reviewer-chips" role="group" aria-label="Filter by repository">
               <button
@@ -401,17 +517,33 @@ export function App() {
               >
                 All repos
               </button>
-              {repoNames.map((repo) => (
-                <button
-                  key={repo}
-                  type="button"
-                  className={`chip chip--repo ${focusRepos.has(repo) ? "chip--active" : ""}`}
-                  onClick={() => toggleFocusRepo(repo)}
-                  title={repo}
-                >
-                  <span className="chip-repo-name">{formatRepoDisplayLabel(repo)}</span>
-                  <span className="chip-count">{repoCounts.get(repo) ?? 0}</span>
-                </button>
+              {visibleRepoNames.map((repo) => (
+                <span key={repo} className="chip-repo-wrap">
+                  <button
+                    type="button"
+                    className={`chip chip--repo ${focusRepos.has(repo) ? "chip--active" : ""}`}
+                    onClick={() => toggleFocusRepo(repo)}
+                    title={repo}
+                  >
+                    <span className="chip-repo-name">{formatRepoDisplayLabel(repo)}</span>
+                    <span className="chip-count">{repoCounts.get(repo) ?? 0}</span>
+                  </button>
+                  <button
+                    type="button"
+                    className="chip-tree-btn"
+                    onClick={() => setBranchRepo(repo)}
+                    title="Open branches tree"
+                    aria-label={`Show branch tree for ${repo}`}
+                  >
+                    <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                      <circle cx="4" cy="3" r="1.5" />
+                      <circle cx="4" cy="13" r="1.5" />
+                      <circle cx="12" cy="8" r="1.5" />
+                      <path d="M4 4.5v7" />
+                      <path d="M4 8c4 0 6-1.5 6.5-3" />
+                    </svg>
+                  </button>
+                </span>
               ))}
             </div>
           </div>
@@ -532,6 +664,9 @@ export function App() {
               .join(", ")}
           </p>
         </details>
+      ) : null}
+      {branchRepo ? (
+        <BranchTreeModal repoFullName={branchRepo} onClose={() => setBranchRepo(null)} />
       ) : null}
     </div>
   );
