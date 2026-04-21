@@ -41,7 +41,7 @@ const SMARTGIT_POKE_TOKEN = process.env.SMARTGIT_POKE_TOKEN?.trim() || "";
 const REPOS = process.env.REPOS ?? "";
 
 const PORT = Number(process.env.PORT ?? 4001);
-const POLL_MS = Math.max(10_000, Number(process.env.POLL_INTERVAL_MS ?? 60_000));
+const POLL_MS = Math.max(10_000, Number(process.env.POLL_INTERVAL_MS ?? 300_000));
 
 if (!GITHUB_TOKEN) {
   log.error("GITHUB_TOKEN is required");

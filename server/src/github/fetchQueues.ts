@@ -339,15 +339,15 @@ export async function fetchSmartGitSnapshot(
       return;
     }
 
-    const [reviews, reviewers] = await Promise.all([
-      octokit.paginate(octokit.rest.pulls.listReviews, {
-        owner,
-        repo,
-        pull_number: pr.number,
-        per_page: 100,
-      }),
-      octokit.rest.pulls.listRequestedReviewers({ owner, repo, pull_number: pr.number }),
-    ]);
+    const reviews = await octokit.paginate(octokit.rest.pulls.listReviews, {
+      owner,
+      repo,
+      pull_number: pr.number,
+      per_page: 100,
+    });
+
+    const requestedUsers = pr.requested_reviewers ?? [];
+    const requestedTeams = pr.requested_teams ?? [];
 
     const latestByLogin = latestReviewStateByLogin(reviews);
     const changesRequestedBy = [...latestByLogin.entries()]
@@ -394,12 +394,12 @@ export async function fetchSmartGitSnapshot(
       projects,
     };
 
-    for (const u of reviewers.data.users) {
-      if (!u.login) continue;
+    for (const u of requestedUsers) {
+      if (!("login" in u) || !u.login) continue;
       addItem(u.login, { ...baseItem }, u.avatar_url);
     }
 
-    for (const team of reviewers.data.teams) {
+    for (const team of requestedTeams) {
       if (!team.slug) continue;
       const item: PendingReviewItemBase = { ...baseItem, teamSlug: team.slug };
       try {
@@ -419,8 +419,12 @@ export async function fetchSmartGitSnapshot(
       }
     }
 
-    const userReq = reviewers.data.users.map((u) => u.login).filter(Boolean) as string[];
-    const teamSlugs = reviewers.data.teams.map((t) => t.slug).filter(Boolean) as string[];
+    const userReq = requestedUsers
+      .map((u) => ("login" in u ? u.login : null))
+      .filter((l): l is string => typeof l === "string" && l.length > 0);
+    const teamSlugs = requestedTeams
+      .map((t) => t.slug)
+      .filter((s): s is string => typeof s === "string" && s.length > 0);
     allOpenMap.set(`${fullName}#${pr.number}`, {
       repoFullName: fullName,
       pullNumber: pr.number,
