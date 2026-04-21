@@ -37,6 +37,7 @@ function loadSnapshotEnvFromDotenvFiles(): Required<SnapshotEnvOptions> {
 const log = pino({ level: process.env.LOG_LEVEL ?? "info" });
 
 const GITHUB_TOKEN = process.env.GITHUB_TOKEN;
+const SMARTGIT_POKE_TOKEN = process.env.SMARTGIT_POKE_TOKEN?.trim() || "";
 const REPOS = process.env.REPOS ?? "";
 
 const PORT = Number(process.env.PORT ?? 4001);
@@ -63,6 +64,12 @@ if (reposExcludePreview) {
 }
 
 const octokit = createGitHubOctokit(GITHUB_TOKEN);
+const pokeOctokit = SMARTGIT_POKE_TOKEN ? createGitHubOctokit(SMARTGIT_POKE_TOKEN) : octokit;
+if (SMARTGIT_POKE_TOKEN) {
+  log.info("SMARTGIT_POKE_TOKEN set — pokes will be posted from the SmartGit account, not GITHUB_TOKEN");
+} else {
+  log.info("SMARTGIT_POKE_TOKEN unset — pokes fall back to GITHUB_TOKEN");
+}
 
 let cache: Awaited<ReturnType<typeof fetchSmartGitSnapshot>> | null = null;
 let refreshPromise: Promise<void> | null = null;
@@ -124,6 +131,11 @@ app.post("/api/pr/:owner/:repo/:pullNumber/poke", async (req, res) => {
     typeof req.body?.note === "string" ? req.body.note.trim().slice(0, 500) : "";
   const customMessageRaw =
     typeof req.body?.customMessage === "string" ? req.body.customMessage.trim().slice(0, 3200) : "";
+  const senderTag =
+    typeof req.body?.senderTag === "string"
+      ? req.body.senderTag.replace(/[\r\n]+/g, " ").trim().slice(0, 80)
+      : "";
+  const footer = senderTag ? `_(SmartGit poke from ${senderTag})_` : "_(SmartGit poke)_";
 
   let pokeKind: "reviewer" | "author";
   try {
@@ -151,22 +163,19 @@ app.post("/api/pr/:owner/:repo/:pullNumber/poke", async (req, res) => {
     const lead = new RegExp(`^@${esc}\\s*`, "i");
     const userPart = customMessageRaw.replace(lead, "").trim();
     const main = userPart ? `@${targetLogin} ${userPart}` : `@${targetLogin}`;
-    body = `${main}\n\n_(SmartGit poke)_`;
+    body = `${main}\n\n${footer}`;
   } else {
-    const lines =
+    const lead =
       pokeKind === "reviewer"
-        ? [
-            `@${targetLogin} friendly reminder to take a look at this PR when you have a moment. _(SmartGit poke)_`,
-          ]
-        : [
-            `@${targetLogin} heads-up — the next step on this pull request is with you. Please take a look when you can. _(SmartGit poke)_`,
-          ];
+        ? `@${targetLogin} friendly reminder to take a look at this PR when you have a moment.`
+        : `@${targetLogin} heads-up — the next step on this pull request is with you. Please take a look when you can.`;
+    const lines = [`${lead} ${footer}`];
     if (note) lines.push(`_Note:_ ${note}`);
     body = lines.join("\n\n");
   }
 
   try {
-    await octokit.issues.createComment({
+    await pokeOctokit.issues.createComment({
       owner,
       repo,
       issue_number: pullNumber,

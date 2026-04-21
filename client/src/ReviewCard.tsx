@@ -153,6 +153,25 @@ function PokeCustomCompose({
   );
 }
 
+const SENDER_TAG_ENABLED_KEY = "smartgit.senderTag.enabled";
+const SENDER_TAG_VALUE_KEY = "smartgit.senderTag.value";
+
+function readSenderTagEnabled(): boolean {
+  try {
+    return window.localStorage.getItem(SENDER_TAG_ENABLED_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function readSenderTagValue(): string {
+  try {
+    return window.localStorage.getItem(SENDER_TAG_VALUE_KEY) ?? "";
+  } catch {
+    return "";
+  }
+}
+
 export function ReviewCard({
   item,
   onSnapshot,
@@ -165,8 +184,30 @@ export function ReviewCard({
   const [pokeMsg, setPokeMsg] = useState<string | null>(null);
   const [pokeDialogLogin, setPokeDialogLogin] = useState<string | null>(null);
   const [customPokeText, setCustomPokeText] = useState("");
+  const [senderTagEnabled, setSenderTagEnabled] = useState<boolean>(() => readSenderTagEnabled());
+  const [senderTagValue, setSenderTagValue] = useState<string>(() => readSenderTagValue());
   const panelId = useId();
   const pokeTargetFieldId = useId();
+  const senderTagToggleId = useId();
+  const senderTagInputId = useId();
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(SENDER_TAG_ENABLED_KEY, senderTagEnabled ? "1" : "0");
+    } catch {
+      /* ignore quota / disabled storage */
+    }
+  }, [senderTagEnabled]);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(SENDER_TAG_VALUE_KEY, senderTagValue);
+    } catch {
+      /* ignore quota / disabled storage */
+    }
+  }, [senderTagValue]);
+
+  const effectiveSenderTag = senderTagEnabled ? senderTagValue.trim() : "";
   const rTheme = useMemo(() => repoTheme(item.repoFullName), [item.repoFullName]);
   const isCreator = item.kind === PendingReviewKind.ChangesRequested;
   const mergeState = item.mergeableState?.trim() || null;
@@ -199,7 +240,9 @@ export function ReviewCard({
     setBusy(true);
     setPokeMsg(null);
     try {
-      const snap = await postPrPoke(owner, repo, item.pullNumber, targetLogin);
+      const snap = await postPrPoke(owner, repo, item.pullNumber, targetLogin, {
+        ...(effectiveSenderTag ? { senderTag: effectiveSenderTag } : {}),
+      });
       onSnapshot(snap);
     } catch (e) {
       setPokeMsg(e instanceof Error ? e.message : String(e));
@@ -222,6 +265,7 @@ export function ReviewCard({
     try {
       const snap = await postPrPoke(owner, repo, item.pullNumber, login, {
         customMessage: text,
+        ...(effectiveSenderTag ? { senderTag: effectiveSenderTag } : {}),
       });
       onSnapshot(snap);
       closePokeDialog();
@@ -348,6 +392,31 @@ export function ReviewCard({
                   Custom
                 </button>
               </div>
+            </div>
+            <div className="poke-sender-row">
+              <label className="poke-sender-toggle" htmlFor={senderTagToggleId}>
+                <input
+                  id={senderTagToggleId}
+                  type="checkbox"
+                  checked={senderTagEnabled}
+                  disabled={busy}
+                  onChange={(e) => setSenderTagEnabled(e.target.checked)}
+                />
+                <span>Add sender tag</span>
+              </label>
+              {senderTagEnabled ? (
+                <input
+                  id={senderTagInputId}
+                  type="text"
+                  className="poke-sender-input"
+                  value={senderTagValue}
+                  maxLength={80}
+                  placeholder="e.g. Tomer or @tomer"
+                  disabled={busy}
+                  aria-label="Sender tag appended to poke comment"
+                  onChange={(e) => setSenderTagValue(e.target.value)}
+                />
+              ) : null}
             </div>
             {pokeDialogLogin ? (
               <PokeCustomCompose

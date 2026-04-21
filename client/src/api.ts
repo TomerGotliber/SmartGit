@@ -73,7 +73,7 @@ export async function postRefresh(): Promise<SmartGitSnapshot> {
   if (!res.ok) {
     throw new Error(text || res.statusText);
   }
-  const raw = (await res.json()) as SmartGitSnapshot & { creators?: UserQueue[]; allOpen?: AllOpenPrItem[] };
+  const raw = JSON.parse(text) as SmartGitSnapshot & { creators?: UserQueue[]; allOpen?: AllOpenPrItem[] };
   return normalizeSnapshot(raw);
 }
 
@@ -110,16 +110,18 @@ export async function postPrPoke(
   repo: string,
   pullNumber: number,
   targetLogin: string,
-  options?: { note?: string; customMessage?: string }
+  options?: { note?: string; customMessage?: string; senderTag?: string }
 ): Promise<SmartGitSnapshot> {
   const trimmedNote = options?.note?.trim();
   const trimmedCustom = options?.customMessage?.trim().slice(0, 3200);
+  const trimmedSender = options?.senderTag?.replace(/[\r\n]+/g, " ").trim().slice(0, 80);
   const res = await fetch(`/api/pr/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/${pullNumber}/poke`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       targetLogin,
       ...(trimmedCustom ? { customMessage: trimmedCustom } : trimmedNote ? { note: trimmedNote } : {}),
+      ...(trimmedSender ? { senderTag: trimmedSender } : {}),
     }),
   });
   const text = await res.text();
