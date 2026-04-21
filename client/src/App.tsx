@@ -541,14 +541,14 @@ export function App() {
         ) : null}
         {projectNames.names.length > 0 ? (
           <div className="chip-board">
-            <p className="chip-board-label">Versions</p>
-            <div className="reviewer-chips" role="group" aria-label="Filter by version">
+            <p className="chip-board-label">Projects</p>
+            <div className="reviewer-chips" role="group" aria-label="Filter by project">
               <button
                 type="button"
                 className={`chip chip--repo ${focusProjects.size === 0 ? "chip--active" : ""}`}
                 onClick={clearProjectFocus}
               >
-                All versions
+                All projects
               </button>
               {projectNames.names.map((p) => (
                 <button

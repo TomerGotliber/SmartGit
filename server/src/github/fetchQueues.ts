@@ -12,16 +12,49 @@ import {
 
 const log = pino({ name: "smartgit-fetch" });
 
-const VERSION_LABEL_RE = /^\d+\.\d+(?:\.\d+)?(?:[-+][\w.-]+)?$/;
+const PROJECTS_GQL_CHUNK = 25;
 
-function extractLabelsFromPr(pr: { labels?: ({ name?: string | null } | string)[] | null }): string[] {
-  const labels = pr.labels ?? [];
-  const out: string[] = [];
-  for (const l of labels) {
-    const name = typeof l === "string" ? l : l.name;
-    if (name && VERSION_LABEL_RE.test(name)) out.push(name);
+async function fetchProjectsByPrNumber(
+  octokit: InstanceType<typeof Octokit>,
+  owner: string,
+  repo: string,
+  pullNumbers: number[]
+): Promise<Map<number, string[]>> {
+  const result = new Map<number, string[]>();
+  if (pullNumbers.length === 0) return result;
+
+  for (let i = 0; i < pullNumbers.length; i += PROJECTS_GQL_CHUNK) {
+    const slice = pullNumbers.slice(i, i + PROJECTS_GQL_CHUNK);
+    const fields = slice
+      .map((n) => `pr${n}: pullRequest(number: ${n}) { projectsV2(first: 20) { nodes { title } } }`)
+      .join("\n        ");
+    const query = `query($owner: String!, $repo: String!) {
+      repository(owner: $owner, name: $repo) {
+        ${fields}
+      }
+    }`;
+    try {
+      const data = await octokit.graphql<{
+        repository: Record<string, { projectsV2: { nodes: ({ title?: string | null } | null)[] } } | null> | null;
+      }>(query, { owner, repo });
+      const repoData = data.repository;
+      if (!repoData) continue;
+      for (const n of slice) {
+        const pr = repoData[`pr${n}`];
+        if (!pr) continue;
+        const titles = pr.projectsV2.nodes
+          .map((node) => node?.title ?? null)
+          .filter((t): t is string => typeof t === "string" && t.length > 0);
+        if (titles.length > 0) result.set(n, titles);
+      }
+    } catch (e) {
+      log.warn(
+        { err: e, repo: `${owner}/${repo}`, prCount: slice.length },
+        "could not fetch projectsV2 for PR batch (token likely missing read:project / Projects: Read)"
+      );
+    }
   }
-  return out;
+  return result;
 }
 
 /** Resolved once per process; token user for client “my dashboard”. */
@@ -279,12 +312,12 @@ export async function fetchSmartGitSnapshot(
     pr: Awaited<ReturnType<typeof octokit.rest.pulls.list>>["data"][number],
     owner: string,
     repo: string,
-    fullName: string
+    fullName: string,
+    projects: string[]
   ) {
     const mergeableState =
       (pr as { mergeable_state?: string | null }).mergeable_state ?? null;
     const baseRef = pr.base?.ref?.trim() || null;
-    const projects = extractLabelsFromPr(pr);
 
     if (pr.draft) {
       allOpenMap.set(`${fullName}#${pr.number}`, {
@@ -415,12 +448,19 @@ export async function fetchSmartGitSnapshot(
         per_page: 100,
       });
       log.info({ repo: fullName, prs: pulls.length }, "processing repo pulls");
+      const projectsByPr = await fetchProjectsByPrNumber(
+        octokit,
+        owner,
+        repo,
+        pulls.map((p) => p.number)
+      );
       let prIdx = 0;
       async function prWorker() {
         while (true) {
           const j = prIdx++;
           if (j >= pulls.length) return;
-          await processPr(pulls[j]!, owner, repo, fullName);
+          const pr = pulls[j]!;
+          await processPr(pr, owner, repo, fullName, projectsByPr.get(pr.number) ?? []);
         }
       }
       await Promise.all(Array.from({ length: PR_CONCURRENCY }, () => prWorker()));
