@@ -12,21 +12,48 @@ import {
 
 const log = pino({ name: "smartgit-fetch" });
 
-const PROJECTS_GQL_CHUNK = 25;
+const PR_BATCH_GQL_CHUNK = 25;
 
-async function fetchProjectsByPrNumber(
+export type PrEnrichment = {
+  projects: string[];
+  reviews: ReviewRow[];
+};
+
+type GqlPrNode = {
+  projectsV2: { nodes: ({ title?: string | null } | null)[] };
+  reviews: {
+    nodes: ({
+      databaseId?: number | null;
+      state?: string | null;
+      submittedAt?: string | null;
+      author?: { login?: string | null } | null;
+    } | null)[];
+  };
+};
+
+/**
+ * One GraphQL call per ≤25 PRs returns both projectsV2 titles and review history.
+ * Replaces N×REST listReviews + listRequestedReviewers calls — critical for keeping
+ * large orgs under the 5000 req/hr REST budget.
+ */
+async function fetchPrEnrichmentByPrNumber(
   octokit: InstanceType<typeof Octokit>,
   owner: string,
   repo: string,
   pullNumbers: number[]
-): Promise<Map<number, string[]>> {
-  const result = new Map<number, string[]>();
+): Promise<Map<number, PrEnrichment>> {
+  const result = new Map<number, PrEnrichment>();
   if (pullNumbers.length === 0) return result;
 
-  for (let i = 0; i < pullNumbers.length; i += PROJECTS_GQL_CHUNK) {
-    const slice = pullNumbers.slice(i, i + PROJECTS_GQL_CHUNK);
+  for (let i = 0; i < pullNumbers.length; i += PR_BATCH_GQL_CHUNK) {
+    const slice = pullNumbers.slice(i, i + PR_BATCH_GQL_CHUNK);
     const fields = slice
-      .map((n) => `pr${n}: pullRequest(number: ${n}) { projectsV2(first: 20) { nodes { title } } }`)
+      .map(
+        (n) => `pr${n}: pullRequest(number: ${n}) {
+          projectsV2(first: 20) { nodes { title } }
+          reviews(first: 100) { nodes { databaseId state submittedAt author { login } } }
+        }`
+      )
       .join("\n        ");
     const query = `query($owner: String!, $repo: String!) {
       repository(owner: $owner, name: $repo) {
@@ -35,22 +62,30 @@ async function fetchProjectsByPrNumber(
     }`;
     try {
       const data = await octokit.graphql<{
-        repository: Record<string, { projectsV2: { nodes: ({ title?: string | null } | null)[] } } | null> | null;
+        repository: Record<string, GqlPrNode | null> | null;
       }>(query, { owner, repo });
       const repoData = data.repository;
       if (!repoData) continue;
       for (const n of slice) {
         const pr = repoData[`pr${n}`];
         if (!pr) continue;
-        const titles = pr.projectsV2.nodes
+        const projects = pr.projectsV2.nodes
           .map((node) => node?.title ?? null)
           .filter((t): t is string => typeof t === "string" && t.length > 0);
-        if (titles.length > 0) result.set(n, titles);
+        const reviews: ReviewRow[] = pr.reviews.nodes
+          .filter((r): r is NonNullable<typeof r> => r != null)
+          .map((r) => ({
+            id: r.databaseId ?? undefined,
+            state: r.state ?? null,
+            submitted_at: r.submittedAt ?? null,
+            user: r.author?.login ? { login: r.author.login } : null,
+          }));
+        result.set(n, { projects, reviews });
       }
     } catch (e) {
       log.warn(
         { err: e, repo: `${owner}/${repo}`, prCount: slice.length },
-        "could not fetch projectsV2 for PR batch (token likely missing read:project / Projects: Read)"
+        "GraphQL PR enrichment failed; falling back to per-PR REST for this batch"
       );
     }
   }
@@ -311,10 +346,10 @@ export async function fetchSmartGitSnapshot(
   async function processPr(
     pr: Awaited<ReturnType<typeof octokit.rest.pulls.list>>["data"][number],
     owner: string,
-    repo: string,
     fullName: string,
-    projects: string[]
+    enrichment: PrEnrichment
   ) {
+    const projects = enrichment.projects;
     const mergeableState =
       (pr as { mergeable_state?: string | null }).mergeable_state ?? null;
     const baseRef = pr.base?.ref?.trim() || null;
@@ -339,17 +374,10 @@ export async function fetchSmartGitSnapshot(
       return;
     }
 
-    const reviews = await octokit.paginate(octokit.rest.pulls.listReviews, {
-      owner,
-      repo,
-      pull_number: pr.number,
-      per_page: 100,
-    });
-
     const requestedUsers = pr.requested_reviewers ?? [];
     const requestedTeams = pr.requested_teams ?? [];
 
-    const latestByLogin = latestReviewStateByLogin(reviews);
+    const latestByLogin = latestReviewStateByLogin(enrichment.reviews);
     const changesRequestedBy = [...latestByLogin.entries()]
       .filter(([, state]) => state === "CHANGES_REQUESTED")
       .map(([login]) => login)
@@ -452,11 +480,11 @@ export async function fetchSmartGitSnapshot(
         per_page: 100,
       });
       log.info({ repo: fullName, prs: pulls.length }, "processing repo pulls");
-      const projectsByPr = await fetchProjectsByPrNumber(
+      const enrichmentByPr = await fetchPrEnrichmentByPrNumber(
         octokit,
         owner,
         repo,
-        pulls.map((p) => p.number)
+        pulls.filter((p) => !p.draft).map((p) => p.number)
       );
       let prIdx = 0;
       async function prWorker() {
@@ -464,7 +492,8 @@ export async function fetchSmartGitSnapshot(
           const j = prIdx++;
           if (j >= pulls.length) return;
           const pr = pulls[j]!;
-          await processPr(pr, owner, repo, fullName, projectsByPr.get(pr.number) ?? []);
+          const enrichment = enrichmentByPr.get(pr.number) ?? { projects: [], reviews: [] };
+          await processPr(pr, owner, fullName, enrichment);
         }
       }
       await Promise.all(Array.from({ length: PR_CONCURRENCY }, () => prWorker()));
